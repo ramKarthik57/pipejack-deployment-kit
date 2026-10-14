@@ -1,7 +1,9 @@
 #!/bin/bash
 set -e
 SRC="$(dirname "$(realpath "$0")")"
-OUT=/tmp/python-app-malicious.tar.gz
+OUT_DIR="${PIPEJACK_OUTPUT_DIR:-/tmp}"
+mkdir -p "$OUT_DIR"
+OUT="$OUT_DIR/python-app-malicious.tar.gz"
 STAGE=$(mktemp -d)
 cp "$SRC/requirements.txt" "$STAGE/"
 cp "$SRC/setup.py"         "$STAGE/"

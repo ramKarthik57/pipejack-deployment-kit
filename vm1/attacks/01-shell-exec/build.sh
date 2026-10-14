@@ -16,7 +16,9 @@ if [ -z "$BANKING" ]; then
         BANKING=~/banking-api
     fi
 fi
-OUT=/tmp/attack-01-shell-exec.tar.gz
+OUT_DIR="${PIPEJACK_OUTPUT_DIR:-/tmp}"
+mkdir -p "$OUT_DIR"
+OUT="$OUT_DIR/attack-01-shell-exec.tar.gz"
 
 if [ ! -d "$BANKING/src" ]; then
     echo "ERROR: $BANKING/src not found" >&2

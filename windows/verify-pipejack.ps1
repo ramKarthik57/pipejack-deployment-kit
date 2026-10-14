@@ -117,6 +117,7 @@ if (-not $SkipSampleUpload) {
         $SSHKeyArgs = @("-i", $SSHKey)
     }
 
+    $SSH_CMD = if (Get-Command "ssh.exe" -ErrorAction SilentlyContinue) { "ssh.exe" } else { "ssh" }
     $UploadCmd = "upload /tmp/banking-api-clean.tar.gz || ~/pipejack-upload.sh /tmp/banking-api-clean.tar.gz"
     $Target = "$SSHUser@$VM1_IP"
     $CommonArgs = @(
@@ -126,7 +127,7 @@ if (-not $SkipSampleUpload) {
         "-o", "StrictHostKeyChecking=accept-new"
     ) + $SSHKeyArgs + @($Target, $UploadCmd)
 
-    $stdout = & "ssh.exe" @CommonArgs 2>&1
+    $stdout = & $SSH_CMD @CommonArgs 2>&1
     $uploadCode = $LASTEXITCODE
 
     if ($uploadCode -ne 0) {

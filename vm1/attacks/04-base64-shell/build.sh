@@ -10,7 +10,9 @@ if [ -z "$BANKING" ]; then
         BANKING=~/banking-api
     fi
 fi
-OUT=/tmp/attack-04-base64-shell.tar.gz
+OUT_DIR="${PIPEJACK_OUTPUT_DIR:-/tmp}"
+mkdir -p "$OUT_DIR"
+OUT="$OUT_DIR/attack-04-base64-shell.tar.gz"
 
 [ -d "$BANKING/src" ] || { echo "ERROR: $BANKING/src missing" >&2; exit 1; }
 

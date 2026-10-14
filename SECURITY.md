@@ -24,17 +24,21 @@ The **PipeJack Deployment Kit** is designed for controlled cybersecurity researc
 
 ---
 
-## 3. Demo Console Security Restrictions & Known Limitations
+## 3. Demo Console Security Architecture & Network Exposure
 
-The Web Demo Console (`server.py`, port `8090`) includes interactive WebSocket PTY terminal endpoints (`/ws/terminal/vm1` and `/ws/terminal/vm2`) to enable real-time visualization of build telemetry and kernel diffs.
+The Web Demo Console (`server.py`, default port `8090`) provides a graphical visualization interface for PipeJack build attestations, telemetry diffs, and interactive terminal sessions (`/ws/terminal/vm1` and `/ws/terminal/vm2`).
 
-### Operational Constraints & Risks
-- **No Inherent Web Authentication:** By design for low-friction lab evaluation, the console does not require a web login.
-- **Remote Command Execution Risk:** Any client that can reach port `8090` has shell access through the web terminals.
-- **Mandatory Isolation:**
-  - The Demo Console **must only bind to or be accessed via a private host-only or NAT network** (`192.168.88.0/24`, `127.0.0.1`, or host VMware virtual switches).
-  - Do **not** expose port `8090` to the public internet, corporate LANs, or untrusted Wi-Fi networks.
-  - Do **not** place port `8090` behind an unauthenticated public reverse proxy.
+### Default Network Binding & REST Behavior
+- **Default Listening Interface:** Binds to `0.0.0.0:8090` by default (configurable via `PIPEJACK_CONSOLE_HOST` and `PIPEJACK_CONSOLE_PORT` in `/etc/systemd/system/pipejack-demo-console.service`).
+- **Unauthenticated REST API:** All REST endpoints (including `/api/status`, `/api/scenarios`, `/api/audit-logs`, `/api/terminal/access-check`) are **unauthenticated** by design for low-friction lab research and emit `Access-Control-Allow-Origin: *`.
+- **Interactive PTY WebSockets:** The terminal endpoints spawn interactive Bash PTY sessions. To safeguard these sessions, `server.py` enforces:
+  1. **Client IP Subnet Filtering:** Only connections from permitted subnets (default: `127.0.0.0/8`, `192.168.88.0/24`, `192.168.152.0/24`, `::1/128`, or custom `PIPEJACK_ALLOWED_NETWORKS`) can open a terminal. Unauthorized IPs receive `HTTP 403 Forbidden`.
+  2. **Anti-CSWSH Origin Validation:** The `Origin` header must match the expected `Host` header or loopback/lab subnets. Third-party web origins (e.g. `http://evil-attacker.com`) are rejected with `HTTP 403 Forbidden`.
+
+### Operational Lab Constraints & Mandatory Isolation
+- **Private Lab Network Only:** The Demo Console must only run on private host-only or VMware NAT networks (`192.168.88.0/24`, `192.168.152.0/24`, `127.0.0.1`).
+- **Never Expose Publicly:** Do NOT expose port `8090` to the public internet, shared corporate networks, or public reverse proxies without adding an external authenticating reverse proxy (e.g., mTLS or HTTP Basic Auth).
+- **Loopback-Only Hardening:** For local-only access, configure `PIPEJACK_CONSOLE_HOST="127.0.0.1"` in `/etc/systemd/system/pipejack-demo-console.service`.
 
 ---
 

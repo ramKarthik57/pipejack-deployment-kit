@@ -10,7 +10,9 @@ if [ -z "$BANKING" ]; then
         BANKING=~/banking-api
     fi
 fi
-OUT=/tmp/attack-05-multi-stage.tar.gz
+OUT_DIR="${PIPEJACK_OUTPUT_DIR:-/tmp}"
+mkdir -p "$OUT_DIR"
+OUT="$OUT_DIR/attack-05-multi-stage.tar.gz"
 [ -d "$BANKING/src" ] || { echo "ERROR: $BANKING/src missing" >&2; exit 1; }
 STAGE=$(mktemp -d)
 mkdir -p "$STAGE/src"

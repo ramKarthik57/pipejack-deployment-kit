@@ -1,7 +1,9 @@
 #!/bin/bash
 set -e
 SRC="$(dirname "$(realpath "$0")")"
-OUT=/tmp/nodejs-app-clean.tar.gz
+OUT_DIR="${PIPEJACK_OUTPUT_DIR:-/tmp}"
+mkdir -p "$OUT_DIR"
+OUT="$OUT_DIR/nodejs-app-clean.tar.gz"
 STAGE=$(mktemp -d)
 cp "$SRC/package.json" "$STAGE/"
 cp "$SRC/app.js"       "$STAGE/"

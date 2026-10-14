@@ -97,3 +97,4 @@ The Policy Decision Point parses YAML specifications containing:
 
 ### 4. `demo/demo-console`
 The web console provides a browser interface for running demonstrations, monitoring running containers, inspecting attestation chains, and viewing active process trees.
+- **Network Scope & Security Controls:** Binds to `0.0.0.0:8090` by default. REST API endpoints (`/api/*`) are unauthenticated with `Access-Control-Allow-Origin: *` to simplify dashboard telemetry. Interactive terminal endpoints (`/ws/terminal/*`) enforce client IP subnet access lists (`PIPEJACK_ALLOWED_NETWORKS`) and anti-CSWSH `Origin` verification. The console must only be deployed on private lab networks.

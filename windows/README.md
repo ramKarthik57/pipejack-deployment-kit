@@ -6,13 +6,17 @@ This directory contains PowerShell orchestration scripts for deploying, verifyin
 
 ## 1. Prerequisites on Windows Host
 
-1. **Operating System:** Windows 10 (Build 1809+) or Windows 11.
-2. **PowerShell:** PowerShell 5.1 (built-in) or PowerShell 7.x.
-3. **OpenSSH Client:**
+1. **Operating System:** Windows 10 (Build 1809+) or Windows 11 (for Windows PowerShell 5.1 runtime).
+2. **PowerShell Engine:**
+   - **Windows PowerShell 5.1 (Built-in baseline):** All automation scripts are verified 100% compliant with PS 5.1 syntax via AST inspection (0 syntax errors, 0 ternary operators, 0 pipeline chain operators `&&`/`||`).
+   - **PowerShell 7+ (`pwsh`):** Fully supported on both Windows and Linux/macOS. Cross-platform behavior and mock SSH escalation are verified using `pwsh` in the automated test suite.
+   - *Note on Engine Execution:* Genuine execution of the Windows PowerShell 5.1 engine (`powershell.exe`) requires a Windows operating system; Linux-based testing utilizes AST parsing and modern PowerShell (`pwsh`).
+3. **Paths with Spaces:** All scripts support kit roots and SSH key paths containing spaces (e.g. `C:\My Projects\PipeJack Kit\` and `C:\Keys\id ed25519`) using discrete argument arrays for `ssh` and `scp`.
+4. **OpenSSH Client:**
    - Verify by running `ssh.exe -V` in PowerShell.
    - If missing, enable via:
      `Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0`
-4. **Target Virtual Machines:**
+5. **Target Virtual Machines:**
    - Two running Ubuntu VMs (VM1: `192.168.88.132`, VM2: `192.168.88.133`).
    - SSH access configured (password or Ed25519/RSA public key added to `~/.ssh/authorized_keys`).
 

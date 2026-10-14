@@ -304,22 +304,26 @@ if [ -d "$SCRIPT_DIR/demo/demo-console" ]; then
 fi
 
 # Ensure prepare-demo.sh is executable and execute it to generate artifacts
-DEMO_PREP_WARNING=0
+DEMO_STATUS="MISSING"
 if [ -f "$CONSOLE_DIR/prepare-demo.sh" ]; then
     chmod +x "$CONSOLE_DIR/prepare-demo.sh"
     echo "  Generating demo scenario artifacts..."
     DEMO_LOG=$(mktemp)
     if (cd "$CONSOLE_DIR" && ./prepare-demo.sh > "$DEMO_LOG" 2>&1); then
         echo "  [OK] Demo scenario artifacts generated successfully."
+        DEMO_STATUS="SUCCESS"
         rm -f "$DEMO_LOG"
     else
-        echo "  [WARNING] [PARTIAL SUCCESS] Demo scenario artifact generation failed." >&2
+        echo "  [WARNING] [PARTIAL SUCCESS] Demo scenario artifact generation failed!" >&2
         echo "  prepare-demo.sh output:" >&2
         sed 's/^/       | /' "$DEMO_LOG" >&2
         rm -f "$DEMO_LOG"
         echo "  Continuing core installation (demo scenarios are optional for core CI daemon)." >&2
-        DEMO_PREP_WARNING=1
+        DEMO_STATUS="FAILED"
     fi
+else
+    echo "  [WARNING] [PARTIAL SUCCESS] prepare-demo.sh not found in $CONSOLE_DIR; skipping demo scenario artifact generation." >&2
+    DEMO_STATUS="MISSING"
 fi
 
 # --- 7. Systemd Service Deployment & Activation ---
@@ -381,14 +385,20 @@ fi
 
 echo
 echo "============================================================"
-if [ "$DEMO_PREP_WARNING" -ne 0 ]; then
+if [ "$DEMO_STATUS" = "FAILED" ]; then
     echo " [PARTIAL SUCCESS] PIPEJACK VM2 INSTALLATION COMPLETE WITH WARNINGS"
     echo "============================================================"
-    echo " Core services are fully active, but demo scenario artifacts"
-    echo " failed to generate. Regenerate them at any time with:"
+    echo " Core services are active, but demo scenario artifacts failed to generate."
+    echo " The Demo Console is running, but UI demo scenarios require artifacts."
+    echo " To generate them manually, run:"
     echo "   cd $CONSOLE_DIR && ./prepare-demo.sh"
+elif [ "$DEMO_STATUS" = "MISSING" ]; then
+    echo " [PARTIAL SUCCESS] PIPEJACK VM2 INSTALLATION COMPLETE WITH WARNINGS"
+    echo "============================================================"
+    echo " Core services are active, but prepare-demo.sh was not found."
+    echo " Demo scenario artifacts were not generated for the Demo Console."
 else
-    echo " PIPEJACK VM2 INSTALLATION COMPLETE"
+    echo " PIPEJACK VM2 INSTALLATION COMPLETE (FULL DEMO READINESS)"
 fi
 echo "============================================================"
 echo " Lead Orchestrator Node Ready:"

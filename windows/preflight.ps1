@@ -73,16 +73,19 @@ Write-Host "  [OK] Local repository layout and installer files verified." -Foreg
 # 2. Check OpenSSH Client Tools
 Write-Host "`n[+] Checking Windows OpenSSH Client Tools..."
 $SSHBin = Get-Command "ssh.exe" -ErrorAction SilentlyContinue
+if (-not $SSHBin) { $SSHBin = Get-Command "ssh" -ErrorAction SilentlyContinue }
 $SCPBin = Get-Command "scp.exe" -ErrorAction SilentlyContinue
+if (-not $SCPBin) { $SCPBin = Get-Command "scp" -ErrorAction SilentlyContinue }
 
 if (-not $SSHBin) {
-    Write-Host "  [-] ssh.exe not found in PATH. Install Windows OpenSSH Client feature." -ForegroundColor Red
+    Write-Host "  [-] ssh.exe (or ssh) not found in PATH. Install Windows OpenSSH Client feature." -ForegroundColor Red
     exit 1
 }
 if (-not $SCPBin) {
-    Write-Host "  [-] scp.exe not found in PATH." -ForegroundColor Red
+    Write-Host "  [-] scp.exe (or scp) not found in PATH." -ForegroundColor Red
     exit 1
 }
+$SSH_CMD = $SSHBin.Name
 Write-Host "  [OK] OpenSSH client tools available: $($SSHBin.Source)" -ForegroundColor Green
 
 # 3. Network Ping Reachability
@@ -117,7 +120,7 @@ function Test-RemoteHost {
         "-o", "StrictHostKeyChecking=accept-new"
     ) + $SSHKeyArgs + @($Target, $Cmd)
 
-    $output = & "ssh.exe" @CommonArgs 2>&1
+    $output = & $SSH_CMD @CommonArgs 2>&1
     $exitCode = $LASTEXITCODE
 
     if ($exitCode -eq 0) {

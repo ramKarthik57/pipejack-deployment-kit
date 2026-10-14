@@ -170,6 +170,9 @@ if (-not $Force) {
 }
 
 # SSH & SCP Execution Helpers using Argument Arrays
+$SSH_CMD = if (Get-Command "ssh.exe" -ErrorAction SilentlyContinue) { "ssh.exe" } else { "ssh" }
+$SCP_CMD = if (Get-Command "scp.exe" -ErrorAction SilentlyContinue) { "scp.exe" } else { "scp" }
+
 $SSHKeyArgs = @()
 if ($SSHKey -and (Test-Path $SSHKey)) {
     $SSHKeyArgs = @("-i", $SSHKey)
@@ -197,7 +200,7 @@ function Invoke-RemoteCommand {
 
     $CommonArgs += $SSHKeyArgs + @($Target, $Command)
 
-    & "ssh.exe" @CommonArgs
+    & $SSH_CMD @CommonArgs
     $code = $LASTEXITCODE
     if ($code -ne 0) {
         Write-Host "[-] Command failed on $IP (Exit Code: $code)" -ForegroundColor Red
@@ -223,7 +226,7 @@ function Test-RemoteSudo {
     }
     $CommonArgs += @($Target, $TestCmd)
 
-    & "ssh.exe" @CommonArgs 2>&1 | Out-Null
+    & $SSH_CMD @CommonArgs 2>&1 | Out-Null
     return ($LASTEXITCODE -eq 0)
 }
 
@@ -247,7 +250,7 @@ function Send-RemotePackage {
         "-o", "StrictHostKeyChecking=accept-new"
     ) + $SSHKeyArgs + @($LocalSourceDir, $Target)
 
-    & "scp.exe" @ScpArgs
+    & $SCP_CMD @ScpArgs
     $code = $LASTEXITCODE
     if ($code -ne 0) {
         Write-Host "[-] SCP Transfer failed for $IP (Exit Code: $code)" -ForegroundColor Red

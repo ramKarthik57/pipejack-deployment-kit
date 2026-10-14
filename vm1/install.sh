@@ -12,6 +12,8 @@ SKIP_BUILD=0
 CI_ENDPOINT="http://192.168.88.133:8888/upload"
 TARGET_DIR="${HOME}"
 
+SKIP_DEPS=0
+
 show_help() {
     cat << EOF
 PipeJack VM1 Role Installer
@@ -24,6 +26,7 @@ Options:
   -c, --check, --dry-run    Run preflight verification only without modifying system
   --ci-endpoint <URL>       Set the PipeJack CI upload URL (default: http://192.168.88.133:8888/upload)
   --target-dir <DIR>        Destination directory for workloads (default: \$HOME)
+  --skip-deps, --no-deps    Skip apt-get package installation (for non-root or test runs)
   --skip-build              Skip initial generation of workload tarballs in /tmp
 
 Examples:
@@ -51,6 +54,10 @@ while [[ $# -gt 0 ]]; do
         --target-dir)
             TARGET_DIR="$2"
             shift 2
+            ;;
+        --skip-deps|--no-deps)
+            SKIP_DEPS=1
+            shift
             ;;
         --skip-build)
             SKIP_BUILD=1
@@ -98,9 +105,10 @@ fi
 # Disk Space Check
 FREE_DISK_KB=$(df -P "$TARGET_DIR" | tail -1 | awk '{print $4}')
 FREE_DISK_GB=$((FREE_DISK_KB / 1024 / 1024))
+MIN_DISK_GB="${PIPEJACK_MIN_DISK_GB:-1}"
 echo "  Available Disk:   ${FREE_DISK_GB} GB in $TARGET_DIR"
-if [ "$FREE_DISK_GB" -lt 3 ]; then
-    echo "  [-] ERROR: Insufficient disk space (minimum 3 GB required, found ${FREE_DISK_GB} GB)." >&2
+if [ "$FREE_DISK_GB" -lt "$MIN_DISK_GB" ]; then
+    echo "  [-] ERROR: Insufficient disk space (minimum ${MIN_DISK_GB} GB required, found ${FREE_DISK_GB} GB)." >&2
     exit 1
 fi
 
@@ -127,27 +135,31 @@ echo
 echo "[+] Step 2: Installing Client Dependencies (git, curl, tar, jq, nodejs, npm, python3)..."
 echo "  Note: Docker, Java, and Maven are deliberately NOT installed on VM1 (VM1 is client-only)."
 
-SUDO=""
-if [ "$(id -u)" -ne 0 ]; then
-    if command -v sudo >/dev/null 2>&1; then
-        SUDO="sudo"
-    else
-        echo "  [-] ERROR: sudo access required to install system dependencies." >&2
-        exit 1
+if [ $SKIP_DEPS -eq 1 ]; then
+    echo "  Skipping system package installation (--skip-deps requested)."
+else
+    SUDO=""
+    if [ "$(id -u)" -ne 0 ]; then
+        if command -v sudo >/dev/null 2>&1; then
+            SUDO="sudo"
+        else
+            echo "  [-] ERROR: sudo access required to install system dependencies." >&2
+            exit 1
+        fi
     fi
-fi
 
-$SUDO apt-get update -y
-$SUDO apt-get install -y --no-install-recommends \
-    git \
-    curl \
-    tar \
-    jq \
-    nodejs \
-    npm \
-    python3 \
-    iproute2 \
-    ca-certificates
+    $SUDO apt-get update -y
+    $SUDO apt-get install -y --no-install-recommends \
+        git \
+        curl \
+        tar \
+        jq \
+        nodejs \
+        npm \
+        python3 \
+        iproute2 \
+        ca-certificates
+fi
 
 # Verify installed versions
 echo "  Installed git:     $(git --version)"
@@ -243,7 +255,7 @@ find "$TARGET_DIR/evil-pkg" -type f -name "*.sh" -exec chmod +x {} + 2>/dev/null
 # --- 5. Environment & Shell Setup ---
 echo
 echo "[+] Step 5: Configuring Shell Environment & Upload Aliases..."
-BASHRC="$HOME/.bashrc"
+BASHRC="${BASHRC:-$HOME/.bashrc}"
 if [ -f "$BASHRC" ]; then
     if ! grep -q "CI_ENDPOINT" "$BASHRC"; then
         echo "  Adding PipeJack environment variables to $BASHRC..."
@@ -265,9 +277,13 @@ fi
 # --- 6. Initial Archive Generation ---
 if [ $SKIP_BUILD -eq 0 ]; then
     echo
-    echo "[+] Step 6: Generating Initial Workload and Attack Tarballs in /tmp..."
+    echo "[+] Step 6: Generating Initial Workload and Attack Tarballs in ${PIPEJACK_OUTPUT_DIR:-/tmp}..."
     if [ -f "$TARGET_DIR/build-all-tarballs.sh" ]; then
-        "$TARGET_DIR/build-all-tarballs.sh"
+        if [ -n "${PIPEJACK_OUTPUT_DIR:-}" ]; then
+            "$TARGET_DIR/build-all-tarballs.sh" --output-dir "$PIPEJACK_OUTPUT_DIR"
+        else
+            "$TARGET_DIR/build-all-tarballs.sh"
+        fi
     fi
 else
     echo

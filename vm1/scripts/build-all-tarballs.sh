@@ -59,35 +59,56 @@ find_attacks_dir() {
     fi
 }
 
+OUTPUT_DIR="${PIPEJACK_OUTPUT_DIR:-/tmp}"
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --output-dir|-o)
+            OUTPUT_DIR="$2"
+            shift 2
+            ;;
+        --help|-h)
+            echo "Usage: $0 [--output-dir <DIR>]"
+            exit 0
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
+export PIPEJACK_OUTPUT_DIR="$OUTPUT_DIR"
+mkdir -p "$OUTPUT_DIR"
+
 EVIL_PKG_DIR="$(find_fixture_dir "evil-pkg")"
-if [ -z "$EVIL_PKG_DIR" ]; then
-    EVIL_PKG_ARCHIVE="/tmp/evil-pkg-1.0.0.tgz"
+if [ -n "$EVIL_PKG_DIR" ] && [ -d "$EVIL_PKG_DIR" ]; then
+    EVIL_PKG_SRC_ARCHIVE="$EVIL_PKG_DIR/evil-pkg-1.0.0.tgz"
 else
-    EVIL_PKG_ARCHIVE="$EVIL_PKG_DIR/evil-pkg-1.0.0.tgz"
+    EVIL_PKG_SRC_ARCHIVE=""
 fi
 
 echo "============================================================"
 echo " PIPEJACK VM1 — DYNAMIC ARCHIVE GENERATION"
 echo " Working Base Directory: $BASE_DIR"
+echo " Target Output Directory: $OUTPUT_DIR"
 echo "============================================================"
 
 # List of 15 expected generated archives
 EXPECTED_ARCHIVES=(
-    "/tmp/banking-api-clean.tar.gz"
-    "/tmp/banking-api-malicious.tar.gz"
-    "/tmp/calculator-api.tar.gz"
-    "/tmp/nodejs-app-clean.tar.gz"
-    "/tmp/python-app-clean.tar.gz"
-    "/tmp/nodejs-app-malicious.tar.gz"
-    "/tmp/python-app-malicious.tar.gz"
-    "$EVIL_PKG_ARCHIVE"
-    "/tmp/attack-01-shell-exec.tar.gz"
-    "/tmp/attack-02-http-exfil.tar.gz"
-    "/tmp/attack-03-fs-tamper.tar.gz"
-    "/tmp/attack-04-base64-shell.tar.gz"
-    "/tmp/attack-05-multi-stage.tar.gz"
-    "/tmp/attack-06-slow-exfil.tar.gz"
-    "/tmp/attack-07-anomaly.tar.gz"
+    "$OUTPUT_DIR/banking-api-clean.tar.gz"
+    "$OUTPUT_DIR/banking-api-malicious.tar.gz"
+    "$OUTPUT_DIR/calculator-api.tar.gz"
+    "$OUTPUT_DIR/nodejs-app-clean.tar.gz"
+    "$OUTPUT_DIR/python-app-clean.tar.gz"
+    "$OUTPUT_DIR/nodejs-app-malicious.tar.gz"
+    "$OUTPUT_DIR/python-app-malicious.tar.gz"
+    "$OUTPUT_DIR/evil-pkg-1.0.0.tgz"
+    "$OUTPUT_DIR/attack-01-shell-exec.tar.gz"
+    "$OUTPUT_DIR/attack-02-http-exfil.tar.gz"
+    "$OUTPUT_DIR/attack-03-fs-tamper.tar.gz"
+    "$OUTPUT_DIR/attack-04-base64-shell.tar.gz"
+    "$OUTPUT_DIR/attack-05-multi-stage.tar.gz"
+    "$OUTPUT_DIR/attack-06-slow-exfil.tar.gz"
+    "$OUTPUT_DIR/attack-07-anomaly.tar.gz"
 )
 
 # Clean only target files that will be generated to prevent stale archives masking failures
@@ -152,6 +173,9 @@ run_builder "python-malicious" "$PYTHON_MAL_DIR" "./build-tarball.sh"
 if [ -n "$EVIL_PKG_DIR" ] && [ -d "$EVIL_PKG_DIR" ]; then
     if command -v npm >/dev/null 2>&1; then
         run_builder "evil-pkg" "$EVIL_PKG_DIR" "./build.sh"
+        if [ -f "$EVIL_PKG_DIR/evil-pkg-1.0.0.tgz" ] && [ "$OUTPUT_DIR" != "$EVIL_PKG_DIR" ]; then
+            cp "$EVIL_PKG_DIR/evil-pkg-1.0.0.tgz" "$OUTPUT_DIR/evil-pkg-1.0.0.tgz"
+        fi
     else
         echo "  -> evil-pkg: FAILED (npm not installed; required for fixture packaging)"
         FAILURES=$((FAILURES + 1))

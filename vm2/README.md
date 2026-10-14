@@ -99,3 +99,4 @@ The Demo Console web application (`vm2/demo/demo-console/server.py`) includes in
   - `PIPEJACK_CONSOLE_PORT`: HTTP listening port (default: `8090`).
   These variables are configured in `/etc/systemd/system/pipejack-demo-console.service`.
 - **Access Check Diagnostic Endpoint:** Query `http://<VM2_IP>:8090/api/terminal/access-check` to view your client IP, current network policy, and authorization status.
+- **REST API vs WebSocket Distinction:** The console binds to `0.0.0.0:8090` by default. While WebSocket terminal endpoints enforce client IP ACL and Origin checks, all REST API routes (e.g. `/api/status`, `/api/scenarios`) are unauthenticated with `Access-Control-Allow-Origin: *` to facilitate evaluation. The Demo Console is strictly intended for isolated private lab networks.

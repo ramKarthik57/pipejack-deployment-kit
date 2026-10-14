@@ -54,8 +54,9 @@ vm1/
 ```
 
 > [!NOTE]
-> **Archive Generation Dependencies:** While VM1 is configured as a lightweight developer client that can host and upload prebuilt archives, regenerating all 15 workload and attack tarballs from scratch using `build-all-tarballs.sh` requires `default-jdk` (Java 17+), `maven`, and `npm` on the machine running the builder. Individual bash/python fixtures do not require Java.
-
+> **Lightweight Archive Generation:** VM1 functions purely as a developer and workload client. All 15 workload and attack tarballs are created by bundling source code trees using standard `tar` without requiring `default-jdk` or `maven` on VM1. Actual compilation, dependency resolution, eBPF telemetry, and container creation happen isolated on VM2.
+>
+> **Configurable Archive Output Directory:** By default, workload archives are generated in `/tmp`. You can redirect generation to any directory by passing `--output-dir <DIR>` / `-o <DIR>` to `build-all-tarballs.sh` or setting the `PIPEJACK_OUTPUT_DIR` environment variable.
 
 ---
 

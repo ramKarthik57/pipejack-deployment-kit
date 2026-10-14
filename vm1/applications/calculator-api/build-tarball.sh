@@ -1,7 +1,9 @@
 #!/bin/bash
 set -e
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OUT=/tmp/calculator-api.tar.gz
+OUT_DIR="${PIPEJACK_OUTPUT_DIR:-/tmp}"
+mkdir -p "$OUT_DIR"
+OUT="$OUT_DIR/calculator-api.tar.gz"
 
 STAGE=$(mktemp -d)
 cp -r "$DIR/src" "$STAGE/"
