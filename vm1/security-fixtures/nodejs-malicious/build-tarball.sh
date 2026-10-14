@@ -3,6 +3,7 @@ set -e
 SRC="$(dirname "$(realpath "$0")")"
 OUT_DIR="${PIPEJACK_OUTPUT_DIR:-/tmp}"
 mkdir -p "$OUT_DIR"
+OUT_DIR="$(cd "$OUT_DIR" && pwd)"
 OUT="$OUT_DIR/nodejs-app-malicious.tar.gz"
 STAGE=$(mktemp -d)
 cp "$SRC/package.json"    "$STAGE/"

@@ -76,15 +76,11 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-export PIPEJACK_OUTPUT_DIR="$OUTPUT_DIR"
 mkdir -p "$OUTPUT_DIR"
+OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
+export PIPEJACK_OUTPUT_DIR="$OUTPUT_DIR"
 
 EVIL_PKG_DIR="$(find_fixture_dir "evil-pkg")"
-if [ -n "$EVIL_PKG_DIR" ] && [ -d "$EVIL_PKG_DIR" ]; then
-    EVIL_PKG_SRC_ARCHIVE="$EVIL_PKG_DIR/evil-pkg-1.0.0.tgz"
-else
-    EVIL_PKG_SRC_ARCHIVE=""
-fi
 
 echo "============================================================"
 echo " PIPEJACK VM1 — DYNAMIC ARCHIVE GENERATION"
@@ -173,9 +169,6 @@ run_builder "python-malicious" "$PYTHON_MAL_DIR" "./build-tarball.sh"
 if [ -n "$EVIL_PKG_DIR" ] && [ -d "$EVIL_PKG_DIR" ]; then
     if command -v npm >/dev/null 2>&1; then
         run_builder "evil-pkg" "$EVIL_PKG_DIR" "./build.sh"
-        if [ -f "$EVIL_PKG_DIR/evil-pkg-1.0.0.tgz" ] && [ "$OUTPUT_DIR" != "$EVIL_PKG_DIR" ]; then
-            cp "$EVIL_PKG_DIR/evil-pkg-1.0.0.tgz" "$OUTPUT_DIR/evil-pkg-1.0.0.tgz"
-        fi
     else
         echo "  -> evil-pkg: FAILED (npm not installed; required for fixture packaging)"
         FAILURES=$((FAILURES + 1))

@@ -3,6 +3,7 @@ set -e
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT_DIR="${PIPEJACK_OUTPUT_DIR:-/tmp}"
 mkdir -p "$OUT_DIR"
+OUT_DIR="$(cd "$OUT_DIR" && pwd)"
 OUT="$OUT_DIR/calculator-api.tar.gz"
 
 STAGE=$(mktemp -d)

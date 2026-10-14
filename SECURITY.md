@@ -33,7 +33,7 @@ The Web Demo Console (`server.py`, default port `8090`) provides a graphical vis
 - **Unauthenticated REST API:** All REST endpoints (including `/api/status`, `/api/scenarios`, `/api/audit-logs`, `/api/terminal/access-check`) are **unauthenticated** by design for low-friction lab research and emit `Access-Control-Allow-Origin: *`.
 - **Interactive PTY WebSockets:** The terminal endpoints spawn interactive Bash PTY sessions. To safeguard these sessions, `server.py` enforces:
   1. **Client IP Subnet Filtering:** Only connections from permitted subnets (default: `127.0.0.0/8`, `192.168.88.0/24`, `192.168.152.0/24`, `::1/128`, or custom `PIPEJACK_ALLOWED_NETWORKS`) can open a terminal. Unauthorized IPs receive `HTTP 403 Forbidden`.
-  2. **Anti-CSWSH Origin Validation:** The `Origin` header must match the expected `Host` header or loopback/lab subnets. Third-party web origins (e.g. `http://evil-attacker.com`) are rejected with `HTTP 403 Forbidden`.
+  2. **Anti-CSWSH Origin Validation:** The `Origin` header (sent by web browsers) must match the expected `Host` header or loopback/lab subnets. Third-party browser origins (e.g. `http://evil-attacker.com`) are rejected with `HTTP 403 Forbidden`. Requests with a missing or empty `Origin` header (from non-browser command-line utilities or automated scripts) are accepted provided the client IP falls within the permitted subnets.
 
 ### Operational Lab Constraints & Mandatory Isolation
 - **Private Lab Network Only:** The Demo Console must only run on private host-only or VMware NAT networks (`192.168.88.0/24`, `192.168.152.0/24`, `127.0.0.1`).

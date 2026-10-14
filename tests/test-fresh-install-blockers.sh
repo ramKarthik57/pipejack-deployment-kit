@@ -1,20 +1,24 @@
 #!/usr/bin/env bash
-# PipeJack Deployment Kit — Fresh-Install Blocker & Final Acceptance Hardening Test Suite
+# PipeJack Deployment Kit — Final Acceptance Hardening & Regression Test Suite
+#
 # Validates:
-#   1. Elimination of test side-effects: configurable output directory ($PIPEJACK_OUTPUT_DIR),
-#      host /tmp namespace preservation verified via canary marker files.
+#   1. Elimination of test side-effects: safe unique test canaries, no fixed filenames in /tmp,
+#      zero overwrites/deletions of pre-existing /tmp files, and verification that both
+#      relative and space-containing paths keep archives strictly inside configured directories.
 #   2. Real VM1 installation contract: automated invocation of vm1/install.sh --target-dir --skip-deps,
 #      validating directories, symlinks, scripts, all 15 archives (fresh, non-zero, tar -tzf valid),
 #      and verified failure return codes when required inputs or builders are missing.
-#   3. Windows PowerShell AST compatibility & argument arrays: strict PS 5.1 syntax (0 syntax errors,
-#      0 ternary expressions, 0 pipeline chains), and parameter binding with spaces in -KitDir and -SSHKey.
+#   3. Windows PowerShell AST compatibility & discrete argument arrays: strict PS 5.1 AST syntax
+#      (0 syntax errors, 0 ternary, 0 pipeline chains), and discrete native argument preservation
+#      for paths with spaces in actual mock SSH/SCP invocations under PowerShell 7.
 #   4. Behavioral remote sudo detection & interactive escalation: mock SSH/SCP testing passwordless sudo,
 #      password-required sudo failing with code 1 and remediation guidance without -InteractiveSudo,
 #      password-required with -InteractiveSudo passing -t flag, and command failure exit code propagation.
 #   5. Behavioral Demo Console security controls: ephemeral port server test verifying unauthenticated
-#      REST access, authorized Origin upgrade (101), CSWSH rejection (403), and subnet override rejection (403).
-#   6. Automated vm2/install.sh partial-success state reporting: SUCCESS, FAILED (with captured error output),
-#      and MISSING states reflected accurately in final summary and exit code.
+#      REST access, authorized Origin upgrade (101), missing Origin upgrade (101 for CLI/scripts),
+#      CSWSH rejection (403 for untrusted web origins), and subnet override rejection (403).
+#   6. Production implementation verification of vm2/install.sh demo status handling: SUCCESS,
+#      FAILED (with captured error output), and MISSING states exercised directly from vm2/install.sh.
 #   7. Go CI orchestrator static analysis (go vet) and unit tests.
 #   8. Ed25519 cryptographic attestation key generation & signature verification in isolated path.
 #   9. Systemd service unit validation with systemd-analyze verify.
@@ -52,51 +56,140 @@ section() {
 }
 
 # -----------------------------------------------------------------------------
-# Canary Marker Setup: Prove Host /tmp Namespace Remains Untouched
+# Canary Safety: Unique Test-Owned Marker & Pre-Existing /tmp State Snapshot
 # -----------------------------------------------------------------------------
-CANARY_TAG="CANARY_ISOLATION_CHECK_$$_$(date +%s)"
-CANARY_FILE1="/tmp/pipejack-canary-calculator-api.tar.gz"
-CANARY_FILE2="/tmp/pipejack-canary-isolated.marker"
-echo "CANARY_1_$CANARY_TAG" > "$CANARY_FILE1"
-echo "CANARY_2_$CANARY_TAG" > "$CANARY_FILE2"
+# Standard default archive paths in /tmp
+STANDARD_TMP_ARCHIVES=(
+    "/tmp/banking-api-clean.tar.gz"
+    "/tmp/banking-api-malicious.tar.gz"
+    "/tmp/calculator-api.tar.gz"
+    "/tmp/nodejs-app-clean.tar.gz"
+    "/tmp/python-app-clean.tar.gz"
+    "/tmp/nodejs-app-malicious.tar.gz"
+    "/tmp/python-app-malicious.tar.gz"
+    "/tmp/evil-pkg-1.0.0.tgz"
+    "/tmp/attack-01-shell-exec.tar.gz"
+    "/tmp/attack-02-http-exfil.tar.gz"
+    "/tmp/attack-03-fs-tamper.tar.gz"
+    "/tmp/attack-04-base64-shell.tar.gz"
+    "/tmp/attack-05-multi-stage.tar.gz"
+    "/tmp/attack-06-slow-exfil.tar.gz"
+    "/tmp/attack-07-anomaly.tar.gz"
+)
 
-cleanup_canaries() {
-    rm -f "$CANARY_FILE1" "$CANARY_FILE2"
+# Snapshot existing /tmp state without modifying any pre-existing files
+declare -A PRE_EXISTING_TMP_STATE
+for f in "${STANDARD_TMP_ARCHIVES[@]}"; do
+    if [ -e "$f" ]; then
+        PRE_EXISTING_TMP_STATE["$f"]="$(stat -c '%Y:%s' "$f")|$(sha256sum "$f" | awk '{print $1}')"
+    else
+        PRE_EXISTING_TMP_STATE["$f"]="ABSENT"
+    fi
+done
+
+# Create a unique test-owned canary file (using PID and nanosecond timestamp)
+UNIQUE_CANARY_TAG="pipejack_canary_${$}_$(date +%s%N)"
+UNIQUE_CANARY_FILE=$(mktemp "/tmp/${UNIQUE_CANARY_TAG}_XXXXXX.marker")
+echo "$UNIQUE_CANARY_TAG" > "$UNIQUE_CANARY_FILE"
+
+cleanup_unique_canary() {
+    # Verify file ownership before removing; only clean up our own unique test marker
+    if [ -f "$UNIQUE_CANARY_FILE" ]; then
+        local owner_uid
+        owner_uid=$(stat -c '%u' "$UNIQUE_CANARY_FILE" 2>/dev/null || echo -1)
+        if [ "$owner_uid" -eq "$(id -u)" ]; then
+            rm -f "$UNIQUE_CANARY_FILE"
+        fi
+    fi
 }
-trap cleanup_canaries EXIT
+trap cleanup_unique_canary EXIT
 
 echo "============================================================"
 echo " PIPEJACK ACCEPTANCE HARDENING & REGRESSION TEST SUITE"
 echo " Working Directory: $ROOT_DIR"
-echo " Canary Marker:     $CANARY_TAG"
+echo " Unique Canary:     $(basename "$UNIQUE_CANARY_FILE")"
 echo " Date:              $(date -u '+%Y-%m-%d %H:%M:%SZ')"
 echo "============================================================"
 
 # -----------------------------------------------------------------------------
-# Test 1: Configurable Archive Output Directory & Host /tmp Isolation
+# Test 1: Configurable Output Directory Isolation (Spaces & Relative Paths)
 # -----------------------------------------------------------------------------
-section "Archive Generator Configurable Output Directory & Isolation"
-TEST_ISOLATION_DIR=$(mktemp -d "/tmp/pipejack-test-isolation-XXXXXX")
-TEST_OUT_ISOLATION=$(mktemp -d "/tmp/pipejack-test-out-XXXXXX")
+section "Archive Output Directory Isolation (Spaces & Relative Paths)"
+TEST_SPACES_OUT=$(mktemp -d "/tmp/pipejack test out spaces XXXXXX")
+TEST_REL_OUT="tmp_test_rel_out_$$"
+mkdir -p "$TEST_REL_OUT"
 
-# Execute generator with explicit --output-dir
-if "$ROOT_DIR/vm1/scripts/build-all-tarballs.sh" --output-dir "$TEST_OUT_ISOLATION" >/dev/null 2>&1; then
-    # Verify archives were generated in TEST_OUT_ISOLATION and NOT in /tmp
-    ARCH_COUNT=$(find "$TEST_OUT_ISOLATION" -maxdepth 1 -name "*.tar.gz" -o -name "*.tgz" | wc -l)
-    if [ "$ARCH_COUNT" -eq 15 ]; then
-        # Check that canary files in /tmp are intact and untouched
-        if [ "$(cat "$CANARY_FILE1")" = "CANARY_1_$CANARY_TAG" ] && [ "$(cat "$CANARY_FILE2")" = "CANARY_2_$CANARY_TAG" ]; then
-            pass "Generator honors --output-dir ($ARCH_COUNT/15 archives created) and left host /tmp markers untouched"
-        else
-            fail "Generator modified canary files in host /tmp!"
-        fi
-    else
-        fail "Expected 15 archives in isolated output directory, found $ARCH_COUNT"
+cleanup_test1() {
+    rm -rf "$TEST_SPACES_OUT" "$TEST_REL_OUT"
+}
+
+TEST1_OK=1
+
+# 1. Absolute path with spaces
+if "$ROOT_DIR/vm1/scripts/build-all-tarballs.sh" --output-dir "$TEST_SPACES_OUT" >/dev/null 2>&1; then
+    SPACES_COUNT=$(find "$TEST_SPACES_OUT" -maxdepth 1 -name "*.tar.gz" -o -name "*.tgz" | wc -l)
+    if [ "$SPACES_COUNT" -ne 15 ]; then
+        TEST1_OK=0
+        echo "  [-] Expected 15 archives in spaces output directory, found $SPACES_COUNT" >&2
     fi
 else
-    fail "build-all-tarballs.sh --output-dir failed with nonzero exit code"
+    TEST1_OK=0
+    echo "  [-] build-all-tarballs.sh failed with spaces output path" >&2
 fi
-rm -rf "$TEST_ISOLATION_DIR" "$TEST_OUT_ISOLATION"
+
+# 2. Relative path
+if "$ROOT_DIR/vm1/scripts/build-all-tarballs.sh" --output-dir "$TEST_REL_OUT" >/dev/null 2>&1; then
+    REL_COUNT=$(find "$TEST_REL_OUT" -maxdepth 1 -name "*.tar.gz" -o -name "*.tgz" | wc -l)
+    if [ "$REL_COUNT" -ne 15 ]; then
+        TEST1_OK=0
+        echo "  [-] Expected 15 archives in relative output directory, found $REL_COUNT" >&2
+    fi
+else
+    TEST1_OK=0
+    echo "  [-] build-all-tarballs.sh failed with relative output path" >&2
+fi
+
+# 3. Verify evil-pkg fixture source directory is clean (zero .tgz left behind)
+if [ -f "$ROOT_DIR/vm1/security-fixtures/evil-pkg/evil-pkg-1.0.0.tgz" ]; then
+    TEST1_OK=0
+    echo "  [-] evil-pkg fixture source directory contains generated archive!" >&2
+fi
+
+# 4. Verify shared /tmp standard archives were neither created, deleted, nor modified
+for f in "${STANDARD_TMP_ARCHIVES[@]}"; do
+    initial_state="${PRE_EXISTING_TMP_STATE["$f"]}"
+    if [ "$initial_state" = "ABSENT" ]; then
+        if [ -e "$f" ]; then
+            TEST1_OK=0
+            echo "  [-] Leaked archive created in shared /tmp: $f" >&2
+        fi
+    else
+        if [ ! -e "$f" ]; then
+            TEST1_OK=0
+            echo "  [-] Pre-existing file deleted from shared /tmp: $f" >&2
+        else
+            current_state="$(stat -c '%Y:%s' "$f")|$(sha256sum "$f" | awk '{print $1}')"
+            if [ "$initial_state" != "$current_state" ]; then
+                TEST1_OK=0
+                echo "  [-] Pre-existing file modified in shared /tmp: $f" >&2
+            fi
+        fi
+    fi
+done
+
+# 5. Verify unique canary marker is untouched
+if [ ! -f "$UNIQUE_CANARY_FILE" ] || [ "$(cat "$UNIQUE_CANARY_FILE")" != "$UNIQUE_CANARY_TAG" ]; then
+    TEST1_OK=0
+    echo "  [-] Unique canary marker was altered during test" >&2
+fi
+
+cleanup_test1
+
+if [ $TEST1_OK -eq 1 ]; then
+    pass "Configured output directories (spaces and relative) generate all 15 valid archives with zero host /tmp side-effects"
+else
+    fail "Archive output directory isolation failed"
+fi
 
 # -----------------------------------------------------------------------------
 # Test 2: Actual VM1 Installation Contract (install.sh --target-dir --skip-deps)
@@ -106,7 +199,6 @@ VM1_TARGET_DIR=$(mktemp -d "/tmp/pipejack-vm1-target-XXXXXX")
 VM1_OUT_DIR=$(mktemp -d "/tmp/pipejack-vm1-out-XXXXXX")
 VM1_BASHRC=$(mktemp "/tmp/pipejack-vm1-bashrc-XXXXXX")
 
-# Exercise real vm1/install.sh
 INSTALL_OK=0
 VM1_LOG=$(mktemp)
 if BASHRC="$VM1_BASHRC" PIPEJACK_OUTPUT_DIR="$VM1_OUT_DIR" PIPEJACK_MIN_DISK_GB=1 "$ROOT_DIR/vm1/install.sh" --target-dir "$VM1_TARGET_DIR" --skip-deps > "$VM1_LOG" 2>&1; then
@@ -119,7 +211,6 @@ else
 fi
 
 if [ $INSTALL_OK -eq 1 ]; then
-    # 1. Verify Application Directories
     APPS_OK=1
     for app in banking-api calculator-api nodejs-app python-app; do
         if [ ! -d "$VM1_TARGET_DIR/applications/$app" ]; then
@@ -128,7 +219,6 @@ if [ $INSTALL_OK -eq 1 ]; then
         fi
     done
 
-    # 2. Verify Compatibility Symlinks
     LINKS_OK=1
     for link in banking-api calculator-api nodejs-app python-app spring-calc evil-pkg nodejs-malicious python-malicious; do
         if [ ! -L "$VM1_TARGET_DIR/$link" ]; then
@@ -137,13 +227,11 @@ if [ $INSTALL_OK -eq 1 ]; then
         fi
     done
 
-    # 3. Verify Scripts and Executability
     SCRIPTS_OK=1
     if [ ! -x "$VM1_TARGET_DIR/pipejack-upload.sh" ] || [ ! -x "$VM1_TARGET_DIR/build-all-tarballs.sh" ]; then
         SCRIPTS_OK=0
     fi
 
-    # 4. Verify all 15 archives generated in VM1_OUT_DIR
     EXPECTED_15=(
         "$VM1_OUT_DIR/banking-api-clean.tar.gz"
         "$VM1_OUT_DIR/banking-api-malicious.tar.gz"
@@ -182,17 +270,14 @@ fi
 # Test 3: Installed Layout Generator Failure Handling on Missing Input
 # -----------------------------------------------------------------------------
 section "Installed Layout Generator Failure Propagation"
-# Remove calculator-api from the installed target layout
 rm -rf "$VM1_TARGET_DIR/applications/calculator-api"
 rm -f "$VM1_TARGET_DIR/calculator-api"
 
-# Plant a stale archive in output dir
 echo "stale corrupt data" > "$VM1_OUT_DIR/calculator-api.tar.gz"
 
 if PIPEJACK_OUTPUT_DIR="$VM1_OUT_DIR" "$VM1_TARGET_DIR/build-all-tarballs.sh" >/dev/null 2>&1; then
     fail "build-all-tarballs.sh unexpectedly succeeded despite missing input application"
 else
-    # Verify stale corrupt archive was purged and not preserved
     if [ ! -f "$VM1_OUT_DIR/calculator-api.tar.gz" ]; then
         pass "Installed layout generator correctly failed on missing input and purged stale archive"
     else
@@ -204,7 +289,7 @@ rm -rf "$VM1_TARGET_DIR" "$VM1_OUT_DIR" "$VM1_BASHRC"
 # -----------------------------------------------------------------------------
 # Test 4: PowerShell 5.1 AST Syntax Compatibility (Rejecting PS7+ constructs)
 # -----------------------------------------------------------------------------
-section "PowerShell 5.1 AST Syntax Compatibility"
+section "PowerShell 5.1 AST Syntax Compatibility (Static AST Verification)"
 if command -v pwsh >/dev/null 2>&1; then
     PS_CHECK_OUTPUT=$(pwsh -NoProfile -Command "
         \$scripts = @(
@@ -222,7 +307,6 @@ if command -v pwsh >/dev/null 2>&1; then
                 \$errorsFound++
                 continue
             }
-            # Search for PowerShell 7-only AST nodes:
             \$ternaryNodes = \$ast.FindAll({ param(\$node) \$node.GetType().Name -eq 'TernaryExpressionAst' }, \$true)
             \$chainNodes = \$ast.FindAll({ param(\$node) \$node.GetType().Name -eq 'PipelineChainAst' }, \$true)
             if (\$ternaryNodes.Count -gt 0) {
@@ -242,7 +326,7 @@ if command -v pwsh >/dev/null 2>&1; then
     " 2>&1)
 
     if echo "$PS_CHECK_OUTPUT" | grep -q "PS51_COMPLIANT"; then
-        pass "PowerShell AST confirms 100% PS 5.1 compatibility (0 syntax errors, 0 ternary, 0 pipeline chains)"
+        pass "PowerShell AST confirms 100% PS 5.1 syntax compatibility (0 syntax errors, 0 ternary, 0 pipeline chains). [Runtime: pwsh 7.4.6; powershell.exe runtime requires Windows]"
     else
         fail "PowerShell AST detected incompatibility: $PS_CHECK_OUTPUT"
     fi
@@ -251,28 +335,71 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# Test 5: PowerShell Paths With Spaces & Argument Quoting
+# Test 5: Discrete Argument Preservation with Spaces in Live Mock SSH/SCP
 # -----------------------------------------------------------------------------
-section "PowerShell Paths With Spaces & Parameter Handling"
-DIR_WITH_SPACES=$(mktemp -d "/tmp/pipejack kit spaces XXXXXX")
-KEY_WITH_SPACES="$DIR_WITH_SPACES/test key dir/id_ed25519"
-mkdir -p "$(dirname "$KEY_WITH_SPACES")"
-touch "$KEY_WITH_SPACES"
+section "PowerShell Discrete Argument Preservation with Spaces (Mock SSH/SCP via pwsh)"
+MOCK_SPACES_DIR=$(mktemp -d "/tmp/pipejack-mock-spaces-XXXXXX")
+
+cat << 'EOF' > "$MOCK_SPACES_DIR/ssh"
+#!/usr/bin/env bash
+LOGFILE="$(dirname "$0")/ssh_args.log"
+printf "%s\n" "--- EXEC ssh ($# args) ---" >> "$LOGFILE"
+for arg in "$@"; do
+    printf "ARG: [%s]\n" "$arg" >> "$LOGFILE"
+done
+CMD="${@: -1}"
+if [[ "$CMD" == *"sudo -n true"* ]]; then
+    exit 0
+fi
+exit 0
+EOF
+chmod +x "$MOCK_SPACES_DIR/ssh"
+
+cat << 'EOF' > "$MOCK_SPACES_DIR/scp"
+#!/usr/bin/env bash
+LOGFILE="$(dirname "$0")/scp_args.log"
+printf "%s\n" "--- EXEC scp ($# args) ---" >> "$LOGFILE"
+for arg in "$@"; do
+    printf "ARG: [%s]\n" "$arg" >> "$LOGFILE"
+done
+exit 0
+EOF
+chmod +x "$MOCK_SPACES_DIR/scp"
+
+DIR_SPACES=$(mktemp -d "/tmp/pipejack test kit spaces XXXXXX")
+mkdir -p "$DIR_SPACES/vm1" "$DIR_SPACES/vm2"
+KEY_SPACES="$DIR_SPACES/my keys dir/id_ed25519"
+mkdir -p "$(dirname "$KEY_SPACES")"
+touch "$KEY_SPACES"
 
 if command -v pwsh >/dev/null 2>&1; then
-    SPACES_OUTPUT=$(pwsh -NoProfile -Command "
-        & '$ROOT_DIR/windows/setup-pipejack.ps1' -KitDir '$DIR_WITH_SPACES' -SSHKey '$KEY_WITH_SPACES' -SkipPreflight -DryRun
-    " 2>&1)
+    PATH="$MOCK_SPACES_DIR:$PATH" pwsh -NoProfile -Command "
+        & '$ROOT_DIR/windows/setup-pipejack.ps1' -KitDir '$DIR_SPACES' -SSHKey '$KEY_SPACES' -VM2_IP 192.168.88.133 -VM1_IP 192.168.88.132 -SSHUser testuser -SkipPreflight -SkipVM1 -Force
+    " >/dev/null 2>&1 || true
 
-    if echo "$SPACES_OUTPUT" | grep -q "DRY-RUN PREVIEW COMPLETED" && echo "$SPACES_OUTPUT" | grep -q "$DIR_WITH_SPACES"; then
-        pass "setup-pipejack.ps1 correctly handles paths with spaces in -KitDir and -SSHKey"
+    SPACES_ARG_OK=1
+
+    # Check that SCP received the target directory containing spaces as a single discrete argument
+    if ! grep -qF "ARG: [$DIR_SPACES/vm2]" "$MOCK_SPACES_DIR/scp_args.log" && ! grep -qF "ARG: [$DIR_SPACES\vm2]" "$MOCK_SPACES_DIR/scp_args.log"; then
+        SPACES_ARG_OK=0
+        echo "  [-] SCP failed to receive kit path containing spaces as a single discrete argument" >&2
+    fi
+
+    # Check that SSH received the private key containing spaces as a single discrete argument
+    if ! grep -qF "ARG: [$KEY_SPACES]" "$MOCK_SPACES_DIR/ssh_args.log"; then
+        SPACES_ARG_OK=0
+        echo "  [-] SSH failed to receive private key path containing spaces as a single discrete argument" >&2
+    fi
+
+    if [ $SPACES_ARG_OK -eq 1 ]; then
+        pass "Mock SSH/SCP confirmed discrete argument preservation for paths containing spaces under live pwsh execution"
     else
-        fail "setup-pipejack.ps1 failed when handling paths with spaces: $SPACES_OUTPUT"
+        fail "PowerShell argument array passing split arguments containing spaces"
     fi
 else
-    fail "pwsh not available for spaces handling test"
+    fail "pwsh not available for mock spaces argument verification"
 fi
-rm -rf "$DIR_WITH_SPACES"
+rm -rf "$MOCK_SPACES_DIR" "$DIR_SPACES"
 
 # -----------------------------------------------------------------------------
 # Test 6: Behavioral Remote Sudo Detection, Interactive Escalation & Error Propagation
@@ -280,14 +407,12 @@ rm -rf "$DIR_WITH_SPACES"
 section "Behavioral Remote Sudo Detection, Escalation & Error Propagation"
 MOCK_SSH_DIR=$(mktemp -d "/tmp/pipejack-mock-ssh-XXXXXX")
 
-# Create mock ssh executable
 cat << 'EOF' > "$MOCK_SSH_DIR/ssh"
 #!/usr/bin/env bash
 LOGFILE="$(dirname "$0")/ssh.log"
 echo "MOCK_SSH_ARGS: $@" >> "$LOGFILE"
 CMD="${@: -1}"
 
-# Handle sudo capability probe
 if [[ "$CMD" == *"sudo -n true"* ]]; then
     if [ "${MOCK_SUDO_MODE:-}" = "passwordless" ]; then
         exit 0
@@ -296,7 +421,6 @@ if [[ "$CMD" == *"sudo -n true"* ]]; then
     fi
 fi
 
-# Handle forced command failure
 if [ -n "${MOCK_CMD_FAIL:-}" ]; then
     echo "Simulated remote failure with code $MOCK_CMD_FAIL" >&2
     exit "$MOCK_CMD_FAIL"
@@ -306,7 +430,6 @@ exit 0
 EOF
 chmod +x "$MOCK_SSH_DIR/ssh"
 
-# Create mock scp executable
 cat << 'EOF' > "$MOCK_SSH_DIR/scp"
 #!/usr/bin/env bash
 LOGFILE="$(dirname "$0")/scp.log"
@@ -374,7 +497,6 @@ sys.path.insert(0, '$ROOT_DIR/vm2/demo/demo-console')
 import server
 from http.server import ThreadingHTTPServer
 
-# Suppress request logging during test
 class QuietRequestHandler(server.ConsoleRequestHandler):
     def log_message(self, format, *args):
         pass
@@ -393,7 +515,7 @@ try:
     assert r1.getheader('Access-Control-Allow-Origin') == '*', 'Expected CORS * header'
     conn.close()
 
-    # 2. Verify authorized WebSocket upgrade succeeds (101 Switching Protocols)
+    # 2. Verify authorized WebSocket upgrade succeeds with valid matching Origin (101 Switching Protocols)
     s2 = socket.create_connection(('127.0.0.1', port))
     req2 = (
         f'GET /ws/terminal/vm1 HTTP/1.1\r\n'
@@ -409,7 +531,7 @@ try:
     s2.close()
     assert '101 Switching Protocols' in resp2, f'Expected 101, got {resp2}'
 
-    # 3. Verify CSWSH attempt with untrusted origin is rejected with HTTP 403
+    # 3. Verify missing Origin header is accepted (101 Switching Protocols for CLI tools / scripts)
     s3 = socket.create_connection(('127.0.0.1', port))
     req3 = (
         f'GET /ws/terminal/vm1 HTTP/1.1\r\n'
@@ -417,16 +539,14 @@ try:
         f'Upgrade: websocket\r\n'
         f'Connection: Upgrade\r\n'
         f'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n'
-        f'Sec-WebSocket-Version: 13\r\n'
-        f'Origin: http://evil-attacker.com\r\n\r\n'
+        f'Sec-WebSocket-Version: 13\r\n\r\n'
     )
     s3.sendall(req3.encode())
     resp3 = s3.recv(1024).decode()
     s3.close()
-    assert '403 Forbidden' in resp3, f'Expected 403, got {resp3}'
+    assert '101 Switching Protocols' in resp3, f'Expected 101 for missing Origin, got {resp3}'
 
-    # 4. Verify Network ACL rejection when subnet override excludes client IP
-    os.environ['PIPEJACK_ALLOWED_NETWORKS'] = '10.200.0.0/16'
+    # 4. Verify CSWSH attempt with untrusted third-party web origin is rejected with HTTP 403
     s4 = socket.create_connection(('127.0.0.1', port))
     req4 = (
         f'GET /ws/terminal/vm1 HTTP/1.1\r\n'
@@ -435,12 +555,29 @@ try:
         f'Connection: Upgrade\r\n'
         f'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n'
         f'Sec-WebSocket-Version: 13\r\n'
-        f'Origin: http://127.0.0.1:{port}\r\n\r\n'
+        f'Origin: http://evil-attacker.com\r\n\r\n'
     )
     s4.sendall(req4.encode())
     resp4 = s4.recv(1024).decode()
     s4.close()
-    assert '403 Forbidden' in resp4, f'Expected 403, got {resp4}'
+    assert '403 Forbidden' in resp4, f'Expected 403 for untrusted Origin, got {resp4}'
+
+    # 5. Verify Network ACL rejection when subnet override excludes client IP
+    os.environ['PIPEJACK_ALLOWED_NETWORKS'] = '10.200.0.0/16'
+    s5 = socket.create_connection(('127.0.0.1', port))
+    req5 = (
+        f'GET /ws/terminal/vm1 HTTP/1.1\r\n'
+        f'Host: 127.0.0.1:{port}\r\n'
+        f'Upgrade: websocket\r\n'
+        f'Connection: Upgrade\r\n'
+        f'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n'
+        f'Sec-WebSocket-Version: 13\r\n'
+        f'Origin: http://127.0.0.1:{port}\r\n\r\n'
+    )
+    s5.sendall(req5.encode())
+    resp5 = s5.recv(1024).decode()
+    s5.close()
+    assert '403 Forbidden' in resp5, f'Expected 403 for IP out of subnet, got {resp5}'
     del os.environ['PIPEJACK_ALLOWED_NETWORKS']
 
     print('BEHAVIORAL_CONSOLE_VERIFIED')
@@ -450,59 +587,16 @@ finally:
 " 2>&1)
 
 if [ "$BEHAVIORAL_CONSOLE_RESULT" = "BEHAVIORAL_CONSOLE_VERIFIED" ]; then
-    pass "Demo Console server behavioral tests verified: REST unauth 200, valid origin 101, CSWSH 403, subnet override 403"
+    pass "Demo Console server behavioral tests verified: REST unauth 200, valid origin 101, missing origin 101, CSWSH 403, subnet override 403"
 else
     fail "Demo Console server behavioral test failed: $BEHAVIORAL_CONSOLE_RESULT"
 fi
 
 # -----------------------------------------------------------------------------
-# Test 8: Automated Verification of vm2/install.sh Partial-Success Handling
+# Test 8: Production Implementation Verification of vm2/install.sh Demo Status
 # -----------------------------------------------------------------------------
-section "Automated Verification of vm2/install.sh Partial-Success Handling"
+section "Production Implementation Verification of vm2/install.sh Demo Status"
 TMP_VM2_TEST_DIR=$(mktemp -d "/tmp/pipejack-test-vm2-status-XXXXXX")
-
-# Helper function to execute vm2/install.sh demo handling snippet
-run_demo_handling_snippet() {
-    local target_dir="$1"
-    bash -c '
-        CONSOLE_DIR="'"$target_dir"'"
-        CI_PORT=8888
-        CONSOLE_PORT=8090
-        REGISTRY_PORT=5000
-        ATTEST_DIR="/tmp/test-attest"
-
-        # Exact logic extracted from vm2/install.sh:
-        DEMO_STATUS="MISSING"
-        if [ -f "$CONSOLE_DIR/prepare-demo.sh" ]; then
-            chmod +x "$CONSOLE_DIR/prepare-demo.sh"
-            DEMO_LOG=$(mktemp)
-            if (cd "$CONSOLE_DIR" && ./prepare-demo.sh > "$DEMO_LOG" 2>&1); then
-                DEMO_STATUS="SUCCESS"
-                rm -f "$DEMO_LOG"
-            else
-                echo "  [WARNING] [PARTIAL SUCCESS] Demo scenario artifact generation failed!" >&2
-                sed "s/^/       | /" "$DEMO_LOG" >&2
-                rm -f "$DEMO_LOG"
-                DEMO_STATUS="FAILED"
-            fi
-        else
-            echo "  [WARNING] [PARTIAL SUCCESS] prepare-demo.sh not found in $CONSOLE_DIR; skipping demo scenario artifact generation." >&2
-            DEMO_STATUS="MISSING"
-        fi
-
-        # Exact completion banner logic:
-        if [ "$DEMO_STATUS" = "FAILED" ]; then
-            echo "[PARTIAL SUCCESS] PIPEJACK VM2 INSTALLATION COMPLETE WITH WARNINGS"
-            echo "Core services are active, but demo scenario artifacts failed to generate."
-        elif [ "$DEMO_STATUS" = "MISSING" ]; then
-            echo "[PARTIAL SUCCESS] PIPEJACK VM2 INSTALLATION COMPLETE WITH WARNINGS"
-            echo "Core services are active, but prepare-demo.sh was not found."
-        else
-            echo "PIPEJACK VM2 INSTALLATION COMPLETE (FULL DEMO READINESS)"
-        fi
-        echo "STATUS_RESULT: $DEMO_STATUS"
-    '
-}
 
 # Subtest 1: prepare-demo.sh succeeds -> SUCCESS status and FULL DEMO READINESS banner
 DIR_SUCCESS="$TMP_VM2_TEST_DIR/success"
@@ -513,7 +607,7 @@ echo "Artifacts generated successfully"
 exit 0
 EOF
 chmod +x "$DIR_SUCCESS/prepare-demo.sh"
-OUT_SUCCESS=$(run_demo_handling_snippet "$DIR_SUCCESS" 2>&1)
+OUT_SUCCESS=$("$ROOT_DIR/vm2/install.sh" --test-demo-status "$DIR_SUCCESS" 2>&1)
 
 # Subtest 2: prepare-demo.sh fails -> FAILED status, captured error output, PARTIAL SUCCESS banner
 DIR_FAILED="$TMP_VM2_TEST_DIR/failed"
@@ -524,12 +618,12 @@ echo "SYNTAX ERROR in demo fixture at line 42" >&2
 exit 1
 EOF
 chmod +x "$DIR_FAILED/prepare-demo.sh"
-OUT_FAILED=$(run_demo_handling_snippet "$DIR_FAILED" 2>&1)
+OUT_FAILED=$("$ROOT_DIR/vm2/install.sh" --test-demo-status "$DIR_FAILED" 2>&1)
 
 # Subtest 3: prepare-demo.sh missing -> MISSING status and PARTIAL SUCCESS banner
 DIR_MISSING="$TMP_VM2_TEST_DIR/missing"
 mkdir -p "$DIR_MISSING"
-OUT_MISSING=$(run_demo_handling_snippet "$DIR_MISSING" 2>&1)
+OUT_MISSING=$("$ROOT_DIR/vm2/install.sh" --test-demo-status "$DIR_MISSING" 2>&1)
 
 VM2_STATUS_OK=1
 if ! echo "$OUT_SUCCESS" | grep -q "STATUS_RESULT: SUCCESS" || ! echo "$OUT_SUCCESS" | grep -q "FULL DEMO READINESS"; then
@@ -546,7 +640,7 @@ if ! echo "$OUT_MISSING" | grep -q "STATUS_RESULT: MISSING" || ! echo "$OUT_MISS
 fi
 
 if [ $VM2_STATUS_OK -eq 1 ]; then
-    pass "vm2/install.sh partial-success logic accurately reports SUCCESS, FAILED (with captured error log), and MISSING states"
+    pass "Exercised production implementation in vm2/install.sh: accurately reports SUCCESS, FAILED (with captured error log), and MISSING states"
 else
     fail "vm2/install.sh partial-success state validation failed"
 fi
@@ -599,28 +693,45 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# Test 12: Host /tmp Namespace Preservation Verification
+# Test 12: Final Host /tmp Namespace Preservation Verification
 # -----------------------------------------------------------------------------
 section "Final Host /tmp Namespace Preservation Verification"
-CANARY_OK=1
-if [ ! -f "$CANARY_FILE1" ] || [ "$(cat "$CANARY_FILE1")" != "CANARY_1_$CANARY_TAG" ]; then
-    CANARY_OK=0
-    echo "  [-] Canary file 1 in /tmp was deleted or modified during test run!" >&2
+FINAL_CANARY_OK=1
+
+# Verify unique test marker exists, has expected content, and is owned by current user
+if [ ! -f "$UNIQUE_CANARY_FILE" ] || [ "$(cat "$UNIQUE_CANARY_FILE")" != "$UNIQUE_CANARY_TAG" ]; then
+    FINAL_CANARY_OK=0
+    echo "  [-] Unique canary marker in /tmp was deleted or modified during test run!" >&2
 fi
-if [ ! -f "$CANARY_FILE2" ] || [ "$(cat "$CANARY_FILE2")" != "CANARY_2_$CANARY_TAG" ]; then
-    CANARY_OK=0
-    echo "  [-] Canary file 2 in /tmp was deleted or modified during test run!" >&2
+if [ "$(stat -c '%u' "$UNIQUE_CANARY_FILE" 2>/dev/null || echo -1)" -ne "$(id -u)" ]; then
+    FINAL_CANARY_OK=0
+    echo "  [-] Unique canary marker ownership mismatch!" >&2
 fi
 
-# Verify no leaked tarballs in /tmp
-LEAKED_TARBALLS=$(find /tmp -maxdepth 1 \( -name "banking-api-*.tar.gz" -o -name "calculator-api.tar.gz" -o -name "attack-*.tar.gz" \) ! -name "*canary*" 2>/dev/null || true)
-if [ -n "$LEAKED_TARBALLS" ]; then
-    CANARY_OK=0
-    echo "  [-] Leaked tarballs detected in /tmp: $LEAKED_TARBALLS" >&2
-fi
+# Verify all 15 standard /tmp archive paths were preserved in their exact pre-test state
+for f in "${STANDARD_TMP_ARCHIVES[@]}"; do
+    initial_state="${PRE_EXISTING_TMP_STATE["$f"]}"
+    if [ "$initial_state" = "ABSENT" ]; then
+        if [ -e "$f" ]; then
+            FINAL_CANARY_OK=0
+            echo "  [-] Isolation violation: Archive was leaked to shared /tmp: $f" >&2
+        fi
+    else
+        if [ ! -e "$f" ]; then
+            FINAL_CANARY_OK=0
+            echo "  [-] Isolation violation: Pre-existing file was deleted from shared /tmp: $f" >&2
+        else
+            current_state="$(stat -c '%Y:%s' "$f")|$(sha256sum "$f" | awk '{print $1}')"
+            if [ "$initial_state" != "$current_state" ]; then
+                FINAL_CANARY_OK=0
+                echo "  [-] Isolation violation: Pre-existing file was modified in shared /tmp: $f" >&2
+            fi
+        fi
+    fi
+done
 
-if [ $CANARY_OK -eq 1 ]; then
-    pass "Host /tmp namespace remained strictly untouched throughout entire regression run"
+if [ $FINAL_CANARY_OK -eq 1 ]; then
+    pass "Host /tmp namespace remained strictly untouched throughout entire regression run (no leaks, no overwrites, no deletions)"
 else
     fail "Host /tmp isolation violation detected"
 fi

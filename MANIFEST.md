@@ -9,13 +9,13 @@
 | `.gitignore` | 757 | `0644` | Root / Shared | `7c8c191c3cc0c56e2e71c24546f9596a86a3ed490bf1ccd4582bcc364d0762fd` |
 | `LICENSE` | 2569 | `0644` | Root / Shared | `5f742747cd1c7a00348c5d6535f157c2bf793ee19ba06d7e248e4f62f906f178` |
 | `README.md` | 17847 | `0664` | Root / Shared | `9dd143d2a5e6d5c953744939e67be30fddb1ebc7757e5bd66ff1d6eeb89494c2` |
-| `SECURITY.md` | 4462 | `0644` | Root / Shared | `3a05ca52c07ecc0c820e205f06548aec73d63089f6655f3249fe72344c7cecb7` |
+| `SECURITY.md` | 4673 | `0664` | Root / Shared | `709ef0b82f16e193da94e16a8f2386bd8ba12bcb016f24b6b77ea09b0ccd6229` |
 | `SOURCE_MAPPING.md` | 11484 | `0644` | Root / Shared | `3e705627633a9fc5da981fa6651aabe7b104f85c8754fd0197d429b213941b68` |
 | `UPSTREAM_BASELINE.md` | 4503 | `0644` | Root / Shared | `99ab541a9232f65d4553c294f30e26db3fba64c8487ab65aa9ab2cfa1c993add` |
 | `VM2_DEPLOYMENT_AUDIT.md` | 5515 | `0644` | Root / Shared | `3e7c95dd64e9a2091f9c93f8f012a22b3b7cf39246092284945bc19a91727edf` |
 | `config/README.md` | 397 | `0644` | Configuration | `7aeaa7628a5f68655fb0790ea0dca33068e15b743939ed9b0ba62b91e90192ff` |
 | `config/defaults.env.example` | 996 | `0644` | Configuration | `31f762a7116dae8358be800d23edbb207881c8586ac044359b0ccab6d1ff9d18` |
-| `docs/ARCHITECTURE.md` | 8608 | `0644` | Documentation | `680db0700e1290f3af5653db22a7a8fdee5eaf8026f1c644f116581d41468a22` |
+| `docs/ARCHITECTURE.md` | 8608 | `0664` | Documentation | `680db0700e1290f3af5653db22a7a8fdee5eaf8026f1c644f116581d41468a22` |
 | `docs/FRESH_INSTALL.md` | 6850 | `0664` | Documentation | `40af9d33b0d7298e672eba581707283ba90f6bfe6b25c33436fe9b27137f7690` |
 | `docs/NETWORKING.md` | 4086 | `0644` | Documentation | `5e98f0649ad9755b754fc503ae251bf2a5d99d9febe1e9fa09f580c373491e24` |
 | `docs/RECOVERY.md` | 3140 | `0644` | Documentation | `fc4aca31bf7b1124afb8d0482fc4006cc372093bada9d9a3baf735a421ca2246` |
@@ -25,11 +25,11 @@
 | `shared/templates/01-netplan-vm2.yaml.example` | 498 | `0644` | Root / Shared | `1ccffbb5653831239e011077b644e794b8848d6f9571ef9a27fb83f6d2aee43a` |
 | `shared/templates/hosts.example` | 155 | `0644` | Root / Shared | `27baa2f36776d67d9bb6330371f8c5d7b538bfde3aa6c05f74c353436cc34e36` |
 | `tests/smoke-test.sh` | 5757 | `0755` | Testing / CI | `d8ea4cd1d742de739c4aaa0f043e9300f43b52510ce92347d94953fae1dac4e5` |
-| `tests/test-fresh-install-blockers.sh` | 27675 | `0775` | Testing / CI | `0e2e5b47180e163d9c7a62501a95039a9fc9e0fba7566da1bbd89c5a7e906e86` |
+| `tests/test-fresh-install-blockers.sh` | 31601 | `0775` | Testing / CI | `6709e89d50e414a099cd190515cd66886a08d1e7a9cc18c4a039f23a8b88dc1e` |
 | `tests/validate-installers.sh` | 6182 | `0775` | Testing / CI | `804aad743bd20f21b65fe44a13d3015909934ad81a8c5056b1d45a9cf56ae504` |
 | `tests/validate-layout.sh` | 6147 | `0755` | Testing / CI | `1a921ba2dd074680fc6158b0028f5245846b3c86e39e880c547231999636e2c6` |
-| `vm1/README.md` | 4720 | `0644` | VM1 (Client) | `fdbb1d628cfdc29c042046084649fcb9b293f9504955c630938ade53ff495d78` |
-| `vm1/applications/banking-api/build-tarballs.sh` | 692 | `0755` | VM1 (Client) | `5c5b3eb745b5b6af91adce70d5109a9a6e73383aa6682d2819890fb644d9f18d` |
+| `vm1/README.md` | 4720 | `0664` | VM1 (Client) | `fdbb1d628cfdc29c042046084649fcb9b293f9504955c630938ade53ff495d78` |
+| `vm1/applications/banking-api/build-tarballs.sh` | 726 | `0775` | VM1 (Client) | `edaec304abf0eafc8cc77a5305e929574868fb5b9cb7e5210e36a689204521f4` |
 | `vm1/applications/banking-api/malicious.sh` | 163 | `0755` | VM1 (Client) | `e2c4af5a3b8b4fdede87515f34311c3f2a72178b89f55d6b37666f6560c6aba1` |
 | `vm1/applications/banking-api/pom-clean.xml` | 1285 | `0644` | VM1 (Client) | `5c7150c075103e1687fc66508e83d5c1e3085fa0a8b0a0e17ee8d4a37fe7e31e` |
 | `vm1/applications/banking-api/pom-malicious.xml` | 2103 | `0644` | VM1 (Client) | `9a47969e0c492fb7a9a4547b73973b16790ef0ddeabe17befed64c60316bac1f` |
@@ -40,64 +40,64 @@
 | `vm1/applications/banking-api/src/main/java/com/pipejack/banking/service/AccountService.java` | 1547 | `0644` | VM1 (Client) | `a4cc848d986c5896aa5b58f1c922c71d11211ff5ed3e5612dd62a81a64329935` |
 | `vm1/applications/banking-api/src/test/java/com/pipejack/banking/BankingApplicationTests.java` | 305 | `0644` | VM1 (Client) | `81d27bc226df7ce3ff11e668146aaaad59cb12f088c9dd5b0e80a7a4e57ece5e` |
 | `vm1/applications/calculator-api/README.md` | 18 | `0644` | VM1 (Client) | `0da694083145a48fe0c1caf0088eabc26fe086018157fb0a1387235261a71a7f` |
-| `vm1/applications/calculator-api/build-tarball.sh` | 321 | `0755` | VM1 (Client) | `dfd1236402d3a360547f16b0c2453dd5f200d9a0bccb4547b35a4fbee5a6a243` |
+| `vm1/applications/calculator-api/build-tarball.sh` | 355 | `0775` | VM1 (Client) | `7f58ddb3efb17f2a57470b7c0db9350b218451ef7b450457b33908d3ff300a26` |
 | `vm1/applications/calculator-api/pom.xml` | 1312 | `0644` | VM1 (Client) | `d575b7de0372db6fb404ba05379dee15721fc6b93148cf2c92f81b78e98b660d` |
 | `vm1/applications/calculator-api/src/main/java/com/pipejack/calculator/CalculatorApplication.java` | 334 | `0644` | VM1 (Client) | `401c233d809ed3500d6bba4db519eba5467297f4769a698f4212f6d1041b5986` |
 | `vm1/applications/calculator-api/src/main/java/com/pipejack/calculator/CalculatorController.java` | 766 | `0644` | VM1 (Client) | `a612b3e9aa7ca2230604bb0b53458356c3ae674e80fa9743515ca28f743877cf` |
 | `vm1/applications/calculator-api/src/test/java/com/pipejack/calculator/CalculatorApplicationTests.java` | 311 | `0644` | VM1 (Client) | `8987ec1d563a8b522976db99662e461ba295bd121359c5a4edce16857072444e` |
 | `vm1/applications/nodejs-app/Dockerfile` | 104 | `0644` | VM1 (Client) | `3586983c657e20290e2a19548a2dc57a62e6e3f76c74a582332f52c318483f99` |
 | `vm1/applications/nodejs-app/app.js` | 303 | `0644` | VM1 (Client) | `f96a59d8b7f6197840401d24fa29ae1fc48a4d7474bb942c540a1b5870fef28c` |
-| `vm1/applications/nodejs-app/build-tarball.sh` | 387 | `0755` | VM1 (Client) | `a0ee8c57979e2575f72ee485cdf4318feee41c065daee8b01a1e3edba128414f` |
+| `vm1/applications/nodejs-app/build-tarball.sh` | 421 | `0775` | VM1 (Client) | `86416778ff0741d2e6ac2a1824299bd8b638db94ab6ddaccd36f3a0c96e00e6f` |
 | `vm1/applications/nodejs-app/package.json` | 326 | `0644` | VM1 (Client) | `26db837066053bd68518b0f068fcdda89438d9251bf6374606ad012edb2e1301` |
 | `vm1/applications/python-app/Dockerfile` | 134 | `0644` | VM1 (Client) | `72f6bb5c2e294468b4b5853a02da076809b677c609d6d05e0b32c289888c94d7` |
 | `vm1/applications/python-app/app.py` | 262 | `0644` | VM1 (Client) | `d642764a0df626ecf86c46b15f0bb0e9aa438e1b0632ebc54fb602cfbc994df5` |
-| `vm1/applications/python-app/build-tarball.sh` | 361 | `0755` | VM1 (Client) | `218b4813e889a9bfbe8dc13e93434db1da61abd3d2adb49ab8b5d8856456c9c5` |
+| `vm1/applications/python-app/build-tarball.sh` | 395 | `0775` | VM1 (Client) | `cd288a503fda9913b4ef2978ca83358b25aedc5c75ec334a7496415d5c1dd87a` |
 | `vm1/applications/python-app/requirements.txt` | 13 | `0644` | VM1 (Client) | `2fb5f25b9caf361a02d485d4d43ed2a6bdba9c1ba828d4e9632c5a3d8767e52d` |
 | `vm1/attacks/01-shell-exec/attack.sh` | 224 | `0755` | VM1 (Client) | `d5751c85f019588af262d66324ccbbbec484d275fbd2630b1b48c5cb555cd7f0` |
-| `vm1/attacks/01-shell-exec/build.sh` | 1029 | `0775` | VM1 (Client) | `a43bad8db5f236a017543d0ac106b873299286e13dc2466e9ba668a35a5abbe2` |
+| `vm1/attacks/01-shell-exec/build.sh` | 1063 | `0775` | VM1 (Client) | `3a7612ef193988961e799fb074dd4f18303d77e3a1f519e339d8cd6c14c02a18` |
 | `vm1/attacks/01-shell-exec/pom.xml` | 2162 | `0644` | VM1 (Client) | `9af3c6366710e223dc9a9695a224bbfddc21397c7d4e00970541ed033a947602` |
 | `vm1/attacks/02-http-exfil/attack.sh` | 455 | `0755` | VM1 (Client) | `b90631287615452cf8b9f67963699b91f85c843236ef186deaabbedabac04927` |
-| `vm1/attacks/02-http-exfil/build.sh` | 775 | `0775` | VM1 (Client) | `24be0547232629ad63e471ac241267aac35cdbe5f72f0ff06c26690e24baca3a` |
+| `vm1/attacks/02-http-exfil/build.sh` | 809 | `0775` | VM1 (Client) | `55dcf639f6f3d751ecdc897813dbeba07a186ef835fceeaeedd3e86c04833417` |
 | `vm1/attacks/02-http-exfil/pom.xml` | 2162 | `0644` | VM1 (Client) | `69b95a5b27484f7538373e5c81169d6931f9e6c9c3ca3a2f9e91cc371eacb23d` |
 | `vm1/attacks/03-fs-tamper/attack.sh` | 887 | `0755` | VM1 (Client) | `2b5ce485ef045db5ef062ca29c0b583fe54de2f1113757b9db18ad7dc8688c39` |
-| `vm1/attacks/03-fs-tamper/build.sh` | 774 | `0775` | VM1 (Client) | `022014e3833889695e319d7d238632f1c64aee3afb8ea1c8bc8482d36de9a118` |
+| `vm1/attacks/03-fs-tamper/build.sh` | 808 | `0775` | VM1 (Client) | `6cdcc3bf4bef153fc701c5baa80245640831767ec64feb259497d1c71d51e2ca` |
 | `vm1/attacks/03-fs-tamper/pom.xml` | 2162 | `0644` | VM1 (Client) | `1a3451601334a3ea614b42021f26c66843d76ff6adcddb208028a46c79cb37af` |
 | `vm1/attacks/04-base64-shell/attack.sh` | 520 | `0755` | VM1 (Client) | `ac81bf3910c4add22dc3eed2210ea3e1154b566dc4c7edded12d81ce9a5ab3eb` |
-| `vm1/attacks/04-base64-shell/build.sh` | 777 | `0775` | VM1 (Client) | `9a70c25559d5ee2635c54921dd81f27b8ffa24a623392ce2b9877379afe85242` |
+| `vm1/attacks/04-base64-shell/build.sh` | 811 | `0775` | VM1 (Client) | `5abbd42ced26611ee5f4287d866d6a091694be182ff1d0c304cee91027442466` |
 | `vm1/attacks/04-base64-shell/pom.xml` | 2162 | `0644` | VM1 (Client) | `f34c672a2c8b286ec3ee2cbb79834ce8c0b1a4058db3aded0748e6ed0cb3c6f9` |
 | `vm1/attacks/05-multi-stage/attack.sh` | 512 | `0755` | VM1 (Client) | `7671bc9b87fbf84e78eed3e255fd1951023eb2585580d260946c979f35e35a3b` |
-| `vm1/attacks/05-multi-stage/build.sh` | 773 | `0775` | VM1 (Client) | `cd7c40ae603793f5a8946548cae2f242800cdd281683dd9f66e04dc1ceed198e` |
+| `vm1/attacks/05-multi-stage/build.sh` | 807 | `0775` | VM1 (Client) | `0b5e411173276f863c62305e09563c98bc6bfe7eb00eb4bf50fe63c2f8772797` |
 | `vm1/attacks/05-multi-stage/pom.xml` | 2162 | `0644` | VM1 (Client) | `c6db958f3af68b4f98d2743f530f814b081986d7edd8dde7cd9823d209b2a867` |
 | `vm1/attacks/06-slow-exfil/attack.sh` | 490 | `0755` | VM1 (Client) | `42e4e5c1ada75ad5e1b7ce9fa334f73fa301abd2b94b9c4a1a95aabdd7e837b8` |
-| `vm1/attacks/06-slow-exfil/build.sh` | 775 | `0775` | VM1 (Client) | `1ffe6fd032adb44323a2a18ce7497018f208513f41fab6c38d0d83fd58f61e19` |
+| `vm1/attacks/06-slow-exfil/build.sh` | 809 | `0775` | VM1 (Client) | `1af94d1dcf1f9231b31a92c6738f49b05f84d3b7f2e9e79ec00ffc5a137c2ef1` |
 | `vm1/attacks/06-slow-exfil/pom.xml` | 2162 | `0644` | VM1 (Client) | `6621056f6557eb78e02d36872711aad63202458267dfef763b6d6f07db6b61d9` |
 | `vm1/attacks/07-anomaly/attack.sh` | 84 | `0755` | VM1 (Client) | `f29ff0a9a263d8085f795f4a141c589c9a4dfd750a79791606512b1af5bd6afb` |
-| `vm1/attacks/07-anomaly/build.sh` | 769 | `0775` | VM1 (Client) | `345e0cfed57d1a4ceac7cd3eed06c6776d9d4779fcd5ea3f631337e5e0c3529e` |
+| `vm1/attacks/07-anomaly/build.sh` | 803 | `0775` | VM1 (Client) | `64217de00b35801af1d88804bd7c8e7b34d97a376dff3c511b63076a15e74d3e` |
 | `vm1/attacks/07-anomaly/pom.xml` | 2162 | `0644` | VM1 (Client) | `e4744c770d9b92ec6f6f51a0d6801544078aeb9beedb7006c21fcbd42526a8b7` |
 | `vm1/attacks/README.md` | 2171 | `0644` | VM1 (Client) | `dc742008ae303bde38e845c420a9ff885760797e67a02c17960360a80a749901` |
 | `vm1/attacks/run-all.sh` | 1390 | `0755` | VM1 (Client) | `d8949871be60264dc0e63bb53939920f53cd856b3d1c478f12f7c728c5d9dfa1` |
 | `vm1/config/bashrc.snippet` | 284 | `0644` | VM1 (Client) | `52941953db0beb8c7b59ad7ac100abce0d4f62a0be0e6ca75d87caa1f22fdf24` |
 | `vm1/config/vm1.env.example` | 510 | `0644` | VM1 (Client) | `973b3c9a7e25d730ee280e689a9581c152c81d3a28ba48176275820e604bb4ff` |
 | `vm1/install.sh` | 11622 | `0775` | VM1 (Client) | `84620b452418f2404086684a0f3686d86991cc1ff90177940a23fa4c2452c2cd` |
-| `vm1/scripts/build-all-tarballs.sh` | 7934 | `0775` | VM1 (Client) | `746ed5fd1157bd5ba69ba7f0f113362eb938239befeed7b72ed42fe473e23fe5` |
+| `vm1/scripts/build-all-tarballs.sh` | 7627 | `0775` | VM1 (Client) | `e0c8b99b6fd131a8a10c69d700d30b09d89df00ac24ed42c59c3a912751fed92` |
 | `vm1/scripts/pipejack-upload.sh` | 11136 | `0755` | VM1 (Client) | `f692d03bd3fd8de43624e3e4c017271a39b1a26a3649a897a123d0ec03fba85e` |
 | `vm1/security-fixtures/evil-pkg/README.md` | 527 | `0644` | VM1 (Client) | `b33cf1505317e2b39605683f09783ead100cdfbf156328de287c6626526494cf` |
-| `vm1/security-fixtures/evil-pkg/build.sh` | 184 | `0755` | VM1 (Client) | `71a3744d24af78448ea27bdad63c4be1b11da38b3cda887a7d4a0e98338cfe2d` |
+| `vm1/security-fixtures/evil-pkg/build.sh` | 682 | `0755` | VM1 (Client) | `7e3fa0a856b3d052ba85c98ea95388949c7706f1f57e21da0f134a6e3d2ff5b8` |
 | `vm1/security-fixtures/evil-pkg/package.json` | 135 | `0644` | VM1 (Client) | `dcbff8171fa2cb998e29b23c698af435ac0e2fee76a5cf91ea46de53985d2a20` |
 | `vm1/security-fixtures/nodejs-malicious/Dockerfile` | 104 | `0644` | VM1 (Client) | `3586983c657e20290e2a19548a2dc57a62e6e3f76c74a582332f52c318483f99` |
 | `vm1/security-fixtures/nodejs-malicious/app.js` | 246 | `0644` | VM1 (Client) | `719fad451b4a90ee4126a666047ce8dc0e272ad206cc1b9ccd6c585a40602bb1` |
-| `vm1/security-fixtures/nodejs-malicious/build-tarball.sh` | 398 | `0755` | VM1 (Client) | `b9b054f7fdaf5132b5b319eec6c95e2d40aad6633e7b1a582f1540d6d4627c27` |
+| `vm1/security-fixtures/nodejs-malicious/build-tarball.sh` | 432 | `0775` | VM1 (Client) | `e42676093339517580882c6bda5839d64cc5ed43185d1171de705086376a9aef` |
 | `vm1/security-fixtures/nodejs-malicious/package.json` | 316 | `0644` | VM1 (Client) | `e5d048744e8ee6bf7b6d71dbcf6df5d48c995728cf0ed8f15ce8429ad105302a` |
 | `vm1/security-fixtures/nodejs-malicious/postinstall.js` | 602 | `0644` | VM1 (Client) | `6d249a74e8f84f33a804a8676dcc37258410904245a3a681dba326689c64c6a7` |
 | `vm1/security-fixtures/python-malicious/Dockerfile` | 134 | `0644` | VM1 (Client) | `72f6bb5c2e294468b4b5853a02da076809b677c609d6d05e0b32c289888c94d7` |
 | `vm1/security-fixtures/python-malicious/app.py` | 202 | `0644` | VM1 (Client) | `5ba03b8ad2ba051b1d04be2c0538291bdea5e551d18b5f1db1123cf1db2dc87b` |
-| `vm1/security-fixtures/python-malicious/build-tarball.sh` | 441 | `0755` | VM1 (Client) | `12014b7361c52445b8a20a17ac3148b05d409aab8b9f2f27c53afde7ec0c5ec0` |
+| `vm1/security-fixtures/python-malicious/build-tarball.sh` | 475 | `0775` | VM1 (Client) | `f78f513fba17b409de63d9d5dadd9cd47f5475e8f5ea02f9e7a43874ceac27a6` |
 | `vm1/security-fixtures/python-malicious/pyproject.toml` | 136 | `0644` | VM1 (Client) | `35c40ca40f50ca13eede94fb8ca1e442d39ab5742ec4d4ee18100ed40d4c6b8f` |
 | `vm1/security-fixtures/python-malicious/requirements.txt` | 11 | `0644` | VM1 (Client) | `4e34d3b17ef5dd1e34865d1d3245f1a40158ec9bc19ea6d3547423a3fb96e916` |
 | `vm1/security-fixtures/python-malicious/setup.py` | 713 | `0644` | VM1 (Client) | `b136aa2341933eb6c4fa2290f62431c8612e071d95df07b505c0a5a7849ebda9` |
 | `vm1/security-fixtures/vuln-app/app.js` | 333 | `0644` | VM1 (Client) | `213f815446bf8abfd2c7d9fbc14d2b3f0367c9c5675f141198f69ffabdd6c6c4` |
 | `vm1/security-fixtures/vuln-app/package.json` | 249 | `0644` | VM1 (Client) | `0652dbfe8d92f4ca1040cad70635ac4e5b46d3e8dacbe21212e10ac55bd8189c` |
-| `vm2/README.md` | 6272 | `0664` | VM2 (Server) | `b128ffe6e708462d5cafe84f84104741b544eb0cee615fe4d59ff4cea1380f8b` |
+| `vm2/README.md` | 6457 | `0664` | VM2 (Server) | `1d355d146a2b74d8c8a85c451ea2eb0a4e4b2743a9fdb04a55cee806a8ad9229` |
 | `vm2/config/ci.env.example` | 533 | `0644` | VM2 (Server) | `7cf4e24819fee305e76d606218896933872eb50b10cf25c790817ae310524545` |
 | `vm2/config/vm2.env.example` | 808 | `0644` | VM2 (Server) | `fb4b241ab5b91dfe0bb2e424d2f1414fc5a628148edf64e150a981b381dec537` |
 | `vm2/core/cilium-ebpf/.clang-format` | 863 | `0644` | VM2 (Server) | `e02c288016b99ae335acc1b42e0be25682c0bcececbe28a1b6e0b46183d39c21` |
@@ -1325,7 +1325,7 @@
 | `vm2/core/pipejack/proctree/scanner.go` | 2672 | `0644` | VM2 (Server) | `119bae64761e3b26ee272b7c5fa5ac941af477224ed85abe870880dcc0b50c6f` |
 | `vm2/core/pipejack/proctree/scanner_test.go` | 6166 | `0644` | VM2 (Server) | `a695153472f5b1dbac1aee718cfde0cfd4581d35cd7c6c31a9651cf979570d38` |
 | `vm2/demo/demo-console/prepare-demo.sh` | 7458 | `0755` | VM2 (Server) | `0868ecc3a9073f7bf4c1a38ac9acd5794cf09e44cd5571c9e7f1d4bc1794f84c` |
-| `vm2/demo/demo-console/server.py` | 105770 | `0664` | VM2 (Server) | `9f43343ab104da343dce3025dc17833fee7a53ae433765bddc4c124847ffb850` |
+| `vm2/demo/demo-console/server.py` | 106322 | `0664` | VM2 (Server) | `ab32937563df1ee143da44f18447d2a4644477e42a2cba9a92c6bb1e9eb7f0d8` |
 | `vm2/demo/demo-console/static/app.js` | 134959 | `0644` | VM2 (Server) | `b7e2063871d64765c9ec95d6c286e91038b852597256c60a6501a731f5f849f5` |
 | `vm2/demo/demo-console/static/index.html` | 100951 | `0644` | VM2 (Server) | `b0272b76dc0f557175da717cb9e8556be6e1572a51f16b11467131fb59216cad` |
 | `vm2/demo/demo-console/static/style.css` | 78826 | `0644` | VM2 (Server) | `0ba333d9f501d19f81b1ffcdce275918794a4f0a47f15fe55ba0c5f9d11cf4f2` |
@@ -1344,7 +1344,7 @@
 | `vm2/deployment/policies/policy-spring.yaml` | 250 | `0644` | VM2 (Server) | `759a7082f5fbb5ac0e57fd515740c1618264564eacb95ba525c5d3edd62556fe` |
 | `vm2/deployment/systemd/pipejack-ci.service` | 562 | `0644` | VM2 (Server) | `1b34236eb86c3425b8a056aff442d4cf32a6acd35242057288f14426184e32fb` |
 | `vm2/deployment/systemd/pipejack-demo-console.service` | 824 | `0664` | VM2 (Server) | `cd99218c656f38d702e845996073296e051d8a50539df72346e4fc3fc8dff436` |
-| `vm2/install.sh` | 14797 | `0775` | VM2 (Server) | `3c35e46b983bd12be4f4eee72f1bb0589661c34268177b8c8820318e729d08f2` |
+| `vm2/install.sh` | 15518 | `0775` | VM2 (Server) | `070ca397e599e687f04d86c1783fc28f188a5cd57e26c847c2f7ecbe8ea00e1d` |
 | `vm2/scripts/deploy-ci.sh` | 1909 | `0755` | VM2 (Server) | `53da40c54ea6cbaa8c0f4c3e978504fdfc2ffe89d0cb1f834a089bd17c86bd4a` |
 | `vm2/scripts/health-check.sh` | 4045 | `0755` | VM2 (Server) | `393004bd638ae1e9c87090ebd65b1fe1e3f0948af22024a68ea4b28b3536f67d` |
 | `vm2/scripts/prepare-demo.sh` | 7458 | `0755` | VM2 (Server) | `0868ecc3a9073f7bf4c1a38ac9acd5794cf09e44cd5571c9e7f1d4bc1794f84c` |
@@ -1359,4 +1359,4 @@
 | `windows/README.md` | 4278 | `0664` | Windows Host | `1ed5e6f124e03bc4eaa4fb723f76aaaae128cec671bf0f42d541abc354a1d0da` |
 | `windows/preflight.ps1` | 6069 | `0664` | Windows Host | `312c2325eeeb56ac227dc0d09f4535ca90c3b5c408f5685b576fac2c3653378d` |
 | `windows/setup-pipejack.ps1` | 16570 | `0664` | Windows Host | `bf37c05251348e70a9539712f7c6890921ecbc5d9a5d3cffec9a3144921ff6cc` |
-| `windows/verify-pipejack.ps1` | 7682 | `0644` | Windows Host | `3af601417c806bc24313e0f6ecd64633b730dfeed2af9dd416a7384b7f7c684c` |
+| `windows/verify-pipejack.ps1` | 7682 | `0664` | Windows Host | `3af601417c806bc24313e0f6ecd64633b730dfeed2af9dd416a7384b7f7c684c` |

@@ -18,6 +18,7 @@ if [ -z "$BANKING" ]; then
 fi
 OUT_DIR="${PIPEJACK_OUTPUT_DIR:-/tmp}"
 mkdir -p "$OUT_DIR"
+OUT_DIR="$(cd "$OUT_DIR" && pwd)"
 OUT="$OUT_DIR/attack-01-shell-exec.tar.gz"
 
 if [ ! -d "$BANKING/src" ]; then

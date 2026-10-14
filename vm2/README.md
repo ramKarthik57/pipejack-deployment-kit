@@ -92,7 +92,7 @@ Expected output:
 The Demo Console web application (`vm2/demo/demo-console/server.py`) includes interactive terminal sessions over WebSocket endpoints (`/ws/terminal/vm1` and `/ws/terminal/vm2`). To safeguard against unauthorized command execution in shared or bridge network configurations, the following controls are enforced:
 
 - **Client IP Subnet Restriction:** Inbound terminal WebSocket requests are restricted by default to loopback and private lab subnets: `127.0.0.0/8`, `192.168.88.0/24`, `192.168.152.0/24`, and `::1/128`. Any connection attempt from an unauthorized client IP is rejected with `HTTP 403 Forbidden`.
-- **WebSocket Origin Validation:** All WebSocket upgrade requests validate the `Origin` header against the expected host header and permitted lab subnets to prevent Cross-Site WebSocket Hijacking (CSWSH) from malicious third-party websites.
+- **WebSocket Origin Validation:** All WebSocket upgrade requests validate the `Origin` header (when sent by browsers) against the expected host header and permitted lab subnets to prevent Cross-Site WebSocket Hijacking (CSWSH). Non-browser CLI tools and automated test clients that do not send an Origin header are accepted provided the client IP is permitted. Third-party web origins are rejected with `HTTP 403 Forbidden`.
 - **Configurable Environment Variables:**
   - `PIPEJACK_ALLOWED_NETWORKS`: Comma-separated list of allowed CIDRs/IPs (default: `127.0.0.0/8,192.168.88.0/24,192.168.152.0/24,::1/128`), or `*` to disable restriction.
   - `PIPEJACK_CONSOLE_HOST`: Network interface to bind (default: `0.0.0.0`). Set to `127.0.0.1` for loopback-only access.

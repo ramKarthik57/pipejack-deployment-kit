@@ -134,6 +134,14 @@ def is_client_allowed(client_ip):
         return False
 
 def is_origin_allowed(origin_str, host_header):
+    """
+    Validates WebSocket Origin header against expected host and network ACL to prevent
+    Cross-Site WebSocket Hijacking (CSWSH) from untrusted third-party web origins.
+    - Missing / empty Origin: Allowed (returns True) to support non-browser automation tools
+      and command-line utilities (e.g. wscat, python scripts) which do not send an Origin header.
+    - Untrusted browser Origin: Rejected (returns False -> HTTP 403 Forbidden).
+    - Matching host / localhost / permitted lab IP Origin: Allowed (returns True -> HTTP 101).
+    """
     if not origin_str:
         return True
     try:

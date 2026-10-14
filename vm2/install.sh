@@ -18,6 +18,52 @@ CONSOLE_DIR="/home/ubuntu/pipejack-demo-console"
 ATTEST_DIR="/home/ubuntu/pipejack-attestations"
 KEY_DIR="/home/ubuntu/.pipejack"
 
+prepare_demo_artifacts() {
+    local target_dir="$1"
+    DEMO_STATUS="MISSING"
+    if [ -f "$target_dir/prepare-demo.sh" ]; then
+        chmod +x "$target_dir/prepare-demo.sh"
+        echo "  Generating demo scenario artifacts..."
+        local demo_log
+        demo_log=$(mktemp)
+        if (cd "$target_dir" && ./prepare-demo.sh > "$demo_log" 2>&1); then
+            echo "  [OK] Demo scenario artifacts generated successfully."
+            DEMO_STATUS="SUCCESS"
+            rm -f "$demo_log"
+        else
+            echo "  [WARNING] [PARTIAL SUCCESS] Demo scenario artifact generation failed!" >&2
+            echo "  prepare-demo.sh output:" >&2
+            sed 's/^/       | /' "$demo_log" >&2
+            rm -f "$demo_log"
+            echo "  Continuing core installation (demo scenarios are optional for core CI daemon)." >&2
+            DEMO_STATUS="FAILED"
+        fi
+    else
+        echo "  [WARNING] [PARTIAL SUCCESS] prepare-demo.sh not found in $target_dir; skipping demo scenario artifact generation." >&2
+        DEMO_STATUS="MISSING"
+    fi
+}
+
+get_demo_status_banner() {
+    local status="$1"
+    local console_dir="${2:-$CONSOLE_DIR}"
+    if [ "$status" = "FAILED" ]; then
+        echo " [PARTIAL SUCCESS] PIPEJACK VM2 INSTALLATION COMPLETE WITH WARNINGS"
+        echo "============================================================"
+        echo " Core services are active, but demo scenario artifacts failed to generate."
+        echo " The Demo Console is running, but UI demo scenarios require artifacts."
+        echo " To generate them manually, run:"
+        echo "   cd $console_dir && ./prepare-demo.sh"
+    elif [ "$status" = "MISSING" ]; then
+        echo " [PARTIAL SUCCESS] PIPEJACK VM2 INSTALLATION COMPLETE WITH WARNINGS"
+        echo "============================================================"
+        echo " Core services are active, but prepare-demo.sh was not found."
+        echo " Demo scenario artifacts were not generated for the Demo Console."
+    else
+        echo " PIPEJACK VM2 INSTALLATION COMPLETE (FULL DEMO READINESS)"
+    fi
+}
+
 show_help() {
     cat << EOF
 PipeJack VM2 Role Installer
@@ -34,6 +80,7 @@ Options:
   --console-port <PORT>     Port for Demo Console (default: 8090)
   --workdir <DIR>           CI working directory (default: /home/ubuntu/custom-ci)
   --console-dir <DIR>       Demo console directory (default: /home/ubuntu/pipejack-demo-console)
+  --test-demo-status <DIR>  Test demo artifact generation in DIR and output state
 
 Examples:
   ./install.sh --dry-run
@@ -76,6 +123,13 @@ while [[ $# -gt 0 ]]; do
         --console-dir)
             CONSOLE_DIR="$2"
             shift 2
+            ;;
+        --test-demo-status)
+            TEST_DIR="$2"
+            prepare_demo_artifacts "$TEST_DIR"
+            get_demo_status_banner "$DEMO_STATUS" "$TEST_DIR"
+            echo "STATUS_RESULT: $DEMO_STATUS"
+            exit 0
             ;;
         *)
             echo "[-] ERROR: Unknown option '$1'. Use --help for usage." >&2
@@ -304,27 +358,7 @@ if [ -d "$SCRIPT_DIR/demo/demo-console" ]; then
 fi
 
 # Ensure prepare-demo.sh is executable and execute it to generate artifacts
-DEMO_STATUS="MISSING"
-if [ -f "$CONSOLE_DIR/prepare-demo.sh" ]; then
-    chmod +x "$CONSOLE_DIR/prepare-demo.sh"
-    echo "  Generating demo scenario artifacts..."
-    DEMO_LOG=$(mktemp)
-    if (cd "$CONSOLE_DIR" && ./prepare-demo.sh > "$DEMO_LOG" 2>&1); then
-        echo "  [OK] Demo scenario artifacts generated successfully."
-        DEMO_STATUS="SUCCESS"
-        rm -f "$DEMO_LOG"
-    else
-        echo "  [WARNING] [PARTIAL SUCCESS] Demo scenario artifact generation failed!" >&2
-        echo "  prepare-demo.sh output:" >&2
-        sed 's/^/       | /' "$DEMO_LOG" >&2
-        rm -f "$DEMO_LOG"
-        echo "  Continuing core installation (demo scenarios are optional for core CI daemon)." >&2
-        DEMO_STATUS="FAILED"
-    fi
-else
-    echo "  [WARNING] [PARTIAL SUCCESS] prepare-demo.sh not found in $CONSOLE_DIR; skipping demo scenario artifact generation." >&2
-    DEMO_STATUS="MISSING"
-fi
+prepare_demo_artifacts "$CONSOLE_DIR"
 
 # --- 7. Systemd Service Deployment & Activation ---
 echo
@@ -385,21 +419,7 @@ fi
 
 echo
 echo "============================================================"
-if [ "$DEMO_STATUS" = "FAILED" ]; then
-    echo " [PARTIAL SUCCESS] PIPEJACK VM2 INSTALLATION COMPLETE WITH WARNINGS"
-    echo "============================================================"
-    echo " Core services are active, but demo scenario artifacts failed to generate."
-    echo " The Demo Console is running, but UI demo scenarios require artifacts."
-    echo " To generate them manually, run:"
-    echo "   cd $CONSOLE_DIR && ./prepare-demo.sh"
-elif [ "$DEMO_STATUS" = "MISSING" ]; then
-    echo " [PARTIAL SUCCESS] PIPEJACK VM2 INSTALLATION COMPLETE WITH WARNINGS"
-    echo "============================================================"
-    echo " Core services are active, but prepare-demo.sh was not found."
-    echo " Demo scenario artifacts were not generated for the Demo Console."
-else
-    echo " PIPEJACK VM2 INSTALLATION COMPLETE (FULL DEMO READINESS)"
-fi
+get_demo_status_banner "$DEMO_STATUS" "$CONSOLE_DIR"
 echo "============================================================"
 echo " Lead Orchestrator Node Ready:"
 echo "   CI Upload Endpoint:  http://192.168.88.133:${CI_PORT}/upload"

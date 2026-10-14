@@ -12,6 +12,7 @@ if [ -z "$BANKING" ]; then
 fi
 OUT_DIR="${PIPEJACK_OUTPUT_DIR:-/tmp}"
 mkdir -p "$OUT_DIR"
+OUT_DIR="$(cd "$OUT_DIR" && pwd)"
 OUT="$OUT_DIR/attack-03-fs-tamper.tar.gz"
 
 [ -d "$BANKING/src" ] || { echo "ERROR: $BANKING/src missing" >&2; exit 1; }
