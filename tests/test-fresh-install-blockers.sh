@@ -686,35 +686,66 @@ if [ "${1:-}" = "--internal-test-creation-race" ]; then
             exit 1
         fi
 
-        # 3. Ownership verification
-        local fuid
-        fuid="$(stat -c '%u' "$fixture" 2>/dev/null || stat -L -c '%u' "$fixture" 2>/dev/null || echo "-1")"
+        # 3. Object existence and type identification
+        local actual_type=""
+        if [ -L "$fixture" ]; then
+            actual_type="symlink"
+        elif [ -d "$fixture" ]; then
+            actual_type="dir"
+        elif [ -f "$fixture" ]; then
+            actual_type="file"
+        else
+            echo "RACE_FIXTURE_PRESERVED:path=$fixture:reason=unknown_type"
+            exit 1
+        fi
+
+        # 4. Ownership and device/inode identity verification
+        local stat_info
+        stat_info="$(stat -c '%u:%d:%i' "$fixture" 2>/dev/null || true)"
+        if [ -z "$stat_info" ]; then
+            echo "RACE_FIXTURE_PRESERVED:path=$fixture:reason=stat_identity_unavailable"
+            exit 1
+        fi
+
+        local fuid fdev fino
+        IFS=':' read -r fuid fdev fino <<< "$stat_info"
+
         if [ "$fuid" -ne "$(id -u)" ]; then
             echo "RACE_FIXTURE_PRESERVED:path=$fixture:reason=owner_mismatch"
             exit 1
         fi
 
-        # 4. Type-verified removal
-        if [ -L "$fixture" ]; then
+        if [ -z "$fdev" ] || [ -z "$fino" ] || [ "$fino" -le 0 ] 2>/dev/null; then
+            echo "RACE_FIXTURE_PRESERVED:path=$fixture:reason=device_inode_invalid"
+            exit 1
+        fi
+
+        local pdev
+        pdev="$(stat -c '%d' "$cdir" 2>/dev/null || true)"
+        if [ -n "$pdev" ] && [ "$fdev" -ne "$pdev" ]; then
+            echo "RACE_FIXTURE_PRESERVED:path=$fixture:reason=device_mismatch_with_parent"
+            exit 1
+        fi
+
+        # 5. Type-verified removal
+        if [ "$actual_type" = "symlink" ]; then
             if rm -f "$fixture" 2>/dev/null; then
                 echo "RACE_FAILED_FIXTURE_CLEANED:path=$fixture:type=symlink"
             else
                 echo "RACE_FIXTURE_PRESERVED:path=$fixture:reason=rm_symlink_failed"
             fi
-        elif [ -d "$fixture" ]; then
+        elif [ "$actual_type" = "dir" ]; then
             if rmdir "$fixture" 2>/dev/null; then
                 echo "RACE_FAILED_FIXTURE_CLEANED:path=$fixture:type=dir"
             else
                 echo "RACE_FIXTURE_PRESERVED:path=$fixture:reason=rmdir_failed"
             fi
-        elif [ -f "$fixture" ]; then
+        elif [ "$actual_type" = "file" ]; then
             if rm -f "$fixture" 2>/dev/null; then
                 echo "RACE_FAILED_FIXTURE_CLEANED:path=$fixture:type=file"
             else
                 echo "RACE_FIXTURE_PRESERVED:path=$fixture:reason=rm_file_failed"
             fi
-        else
-            echo "RACE_FIXTURE_PRESERVED:path=$fixture:reason=unknown_type"
         fi
         exit 1
     }
@@ -865,8 +896,10 @@ if [ "${1:-}" = "--internal-test-creation-race" ]; then
             create_safe_symlink "/tmp/deliberate-mismatched-target-$$" "$LINK" "tmp"
             ;;
         hook_fail_unverified_pattern)
-            LINK="/tmp/unverified-forbidden-pattern-link-$$"
-            ln -s "/tmp" "$LINK" 2>/dev/null
+            LINK="${TARGET_PARAM:-/tmp/unverified-forbidden-pattern-link-$$}"
+            if [ ! -L "$LINK" ] && [ ! -e "$LINK" ]; then
+                ln -s "/tmp" "$LINK" 2>/dev/null
+            fi
             safe_cleanup_failed_hook_fixture "$LINK" "deliberate_pattern_failure"
             ;;
         *)
@@ -1899,9 +1932,131 @@ fi
 
 # 4. Subtest C: Deterministic creation-to-registration interrupt race regression tests
 RACE_OUTPUT=$(python3 -c '
-import subprocess, os, signal, tempfile, hashlib, sys
+import subprocess, os, signal, tempfile, hashlib, sys, stat
 
 SCRIPT_FILE = sys.argv[1]
+
+def safe_validate_and_cleanup_sentinel(sentinel_path, baseline, sentinel_name):
+    errors = []
+    if sentinel_path is None:
+        return True, errors
+
+    if not os.path.lexists(sentinel_path):
+        if baseline is not None:
+            errors.append(f"{sentinel_name} {sentinel_path} was deleted before cleanup")
+            return False, errors
+        return True, errors
+
+    if baseline is None:
+        errors.append(f"{sentinel_name} baseline unrecorded: preserving {sentinel_path}")
+        return False, errors
+
+    mismatches = []
+    if sentinel_path != baseline.get("path"):
+        mismatches.append(f"path mismatch ({sentinel_path} != {baseline.get('path')})")
+
+    if os.path.islink(sentinel_path):
+        mismatches.append("is symlink")
+    elif not os.path.isfile(sentinel_path):
+        mismatches.append("not regular file")
+    else:
+        fd = None
+        try:
+            fd = os.open(sentinel_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                mismatches.append("mode indicates not a regular file")
+            if st.st_uid != baseline.get("uid"):
+                mismatches.append(f"uid mismatch {st.st_uid} != {baseline.get('uid')}")
+            if st.st_uid != os.getuid():
+                mismatches.append(f"uid {st.st_uid} != current user {os.getuid()}")
+            if st.st_dev != baseline.get("dev") or st.st_ino != baseline.get("ino"):
+                mismatches.append("dev/ino changed")
+            if st.st_mode != baseline.get("mode"):
+                mismatches.append("mode changed")
+            if st.st_size != baseline.get("size"):
+                mismatches.append("size changed")
+            if st.st_mtime_ns != baseline.get("mtime_ns"):
+                mismatches.append("mtime changed")
+
+            h = hashlib.sha256()
+            while True:
+                chunk = os.read(fd, 65536)
+                if not chunk:
+                    break
+                h.update(chunk)
+            cur_hash = h.hexdigest()
+            if cur_hash != baseline.get("hash"):
+                mismatches.append("content hash changed")
+        except Exception as e:
+            mismatches.append(f"stat/read error: {e}")
+        finally:
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except Exception:
+                    pass
+
+    if mismatches:
+        reasons_str = "; ".join(mismatches)
+        errors.append(f"{sentinel_name} identity mismatch ({reasons_str}): preserving {sentinel_path}")
+        return False, errors
+
+    try:
+        os.unlink(sentinel_path)
+        return True, errors
+    except Exception as e:
+        errors.append(f"failed to unlink {sentinel_path}: {e}")
+        return False, errors
+
+def safe_validate_and_cleanup_dir(dir_path, baseline, dir_name):
+    errors = []
+    if dir_path is None:
+        return True, errors
+
+    if not os.path.lexists(dir_path):
+        if baseline is not None:
+            errors.append(f"{dir_name} {dir_path} was deleted before cleanup")
+            return False, errors
+        return True, errors
+
+    if baseline is None:
+        errors.append(f"{dir_name} baseline unrecorded: preserving {dir_path}")
+        return False, errors
+
+    mismatches = []
+    if dir_path != baseline.get("path"):
+        mismatches.append(f"path mismatch ({dir_path} != {baseline.get('path')})")
+
+    if os.path.islink(dir_path):
+        mismatches.append("is symlink")
+    elif not os.path.isdir(dir_path):
+        mismatches.append("not a directory")
+    else:
+        try:
+            st = os.stat(dir_path)
+            if not stat.S_ISDIR(st.st_mode):
+                mismatches.append("mode indicates not a directory")
+            if st.st_uid != baseline.get("uid") or st.st_uid != os.getuid():
+                mismatches.append(f"uid mismatch {st.st_uid}")
+            if st.st_dev != baseline.get("dev") or st.st_ino != baseline.get("ino"):
+                mismatches.append("dev/ino changed")
+            if "mode" in baseline and st.st_mode != baseline.get("mode"):
+                mismatches.append("mode changed")
+        except Exception as e:
+            mismatches.append(f"stat error: {e}")
+
+    if mismatches:
+        reasons_str = "; ".join(mismatches)
+        errors.append(f"{dir_name} identity mismatch ({reasons_str}): preserving {dir_path}")
+        return False, errors
+
+    try:
+        os.rmdir(dir_path)
+        return True, errors
+    except Exception as e:
+        errors.append(f"failed to rmdir {dir_path}: {e}")
+        return False, errors
 
 STANDARD_TMP_ARCHIVES = [
     "/tmp/banking-api-clean.tar.gz",
@@ -2188,79 +2343,17 @@ for mode, sig, exp_rc in race_scenarios:
     finally:
         # 4. Independent baseline revalidation and validated cleanup
         if failed_sentinel is not None:
-            if not os.path.lexists(failed_sentinel):
-                if failed_sentinel_baseline is not None:
-                    cleanup_errors.append(f"failed_sentinel {failed_sentinel} was deleted before cleanup")
-            elif failed_sentinel_baseline is None:
-                cleanup_errors.append(f"failed_sentinel baseline unrecorded: preserving {failed_sentinel}")
-            else:
-                mismatch_reasons = []
-                if os.path.islink(failed_sentinel):
-                    mismatch_reasons.append("is symlink")
-                elif not os.path.isfile(failed_sentinel):
-                    mismatch_reasons.append("not regular file")
-                else:
-                    try:
-                        cur_st = os.stat(failed_sentinel)
-                        if cur_st.st_uid != os.getuid():
-                            mismatch_reasons.append(f"uid mismatch {cur_st.st_uid}")
-                        if cur_st.st_dev != failed_sentinel_baseline["dev"] or cur_st.st_ino != failed_sentinel_baseline["ino"]:
-                            mismatch_reasons.append("dev/ino changed")
-                        if cur_st.st_mode != failed_sentinel_baseline["mode"]:
-                            mismatch_reasons.append("mode changed")
-                        if cur_st.st_size != failed_sentinel_baseline["size"]:
-                            mismatch_reasons.append("size changed")
-                        if cur_st.st_mtime_ns != failed_sentinel_baseline["mtime_ns"]:
-                            mismatch_reasons.append("mtime changed")
-                        with open(failed_sentinel, "rb") as f:
-                            cur_h = hashlib.sha256(f.read()).hexdigest()
-                        if cur_h != failed_sentinel_baseline["hash"]:
-                            mismatch_reasons.append("content hash changed")
-                    except Exception as e:
-                        mismatch_reasons.append(f"stat/read error: {e}")
-
-                if not mismatch_reasons:
-                    try:
-                        os.unlink(failed_sentinel)
-                    except Exception as e:
-                        cleanup_errors.append(f"failed to unlink {failed_sentinel}: {e}")
-                else:
-                    reasons_str = "; ".join(mismatch_reasons)
-                    cleanup_errors.append(f"failed_sentinel identity mismatch ({reasons_str}): preserving {failed_sentinel}")
+            cleaned_fs, fs_errs = safe_validate_and_cleanup_sentinel(
+                failed_sentinel, failed_sentinel_baseline, "failed_sentinel"
+            )
+            cleanup_errors.extend(fs_errs)
 
         sentinel_cleaned = False
         if target_sentinel is not None:
-            if not os.path.lexists(target_sentinel):
-                sentinel_cleaned = True
-            elif target_sentinel_baseline is None:
-                cleanup_errors.append(f"target_sentinel baseline unrecorded: preserving {target_sentinel}")
-            else:
-                mismatch_reasons = []
-                if os.path.islink(target_sentinel):
-                    mismatch_reasons.append("is symlink")
-                elif not os.path.isfile(target_sentinel):
-                    mismatch_reasons.append("not regular file")
-                else:
-                    try:
-                        cur_st = os.stat(target_sentinel)
-                        if cur_st.st_uid != os.getuid():
-                            mismatch_reasons.append(f"uid mismatch {cur_st.st_uid}")
-                        if cur_st.st_dev != target_sentinel_baseline["dev"] or cur_st.st_ino != target_sentinel_baseline["ino"]:
-                            mismatch_reasons.append("dev/ino changed")
-                        if cur_st.st_size != target_sentinel_baseline["size"]:
-                            mismatch_reasons.append("size changed")
-                    except Exception as e:
-                        mismatch_reasons.append(f"stat error: {e}")
-
-                if not mismatch_reasons:
-                    try:
-                        os.unlink(target_sentinel)
-                        sentinel_cleaned = True
-                    except Exception as e:
-                        cleanup_errors.append(f"failed to unlink {target_sentinel}: {e}")
-                else:
-                    reasons_str = "; ".join(mismatch_reasons)
-                    cleanup_errors.append(f"target_sentinel identity mismatch ({reasons_str}): preserving {target_sentinel}")
+            sentinel_cleaned, ts_errs = safe_validate_and_cleanup_sentinel(
+                target_sentinel, target_sentinel_baseline, "target_sentinel"
+            )
+            cleanup_errors.extend(ts_errs)
 
         if target_dir is not None:
             if not os.path.lexists(target_dir):
@@ -2270,29 +2363,10 @@ for mode, sig, exp_rc in race_scenarios:
             elif not sentinel_cleaned and target_sentinel is not None and os.path.lexists(target_sentinel):
                 cleanup_errors.append(f"target_dir {target_dir} preserved because sentinel could not be cleaned")
             else:
-                mismatch_reasons = []
-                if os.path.islink(target_dir):
-                    mismatch_reasons.append("is symlink")
-                elif not os.path.isdir(target_dir):
-                    mismatch_reasons.append("not a directory")
-                else:
-                    try:
-                        cur_st = os.stat(target_dir)
-                        if cur_st.st_uid != os.getuid():
-                            mismatch_reasons.append(f"uid mismatch {cur_st.st_uid}")
-                        if cur_st.st_dev != target_dir_baseline["dev"] or cur_st.st_ino != target_dir_baseline["ino"]:
-                            mismatch_reasons.append("dev/ino changed")
-                    except Exception as e:
-                        mismatch_reasons.append(f"stat error: {e}")
-
-                if not mismatch_reasons:
-                    try:
-                        os.rmdir(target_dir)
-                    except Exception as e:
-                        cleanup_errors.append(f"failed to rmdir {target_dir}: {e}")
-                else:
-                    reasons_str = "; ".join(mismatch_reasons)
-                    cleanup_errors.append(f"target_dir identity mismatch ({reasons_str}): preserving {target_dir}")
+                cleaned_td, td_errs = safe_validate_and_cleanup_dir(
+                    target_dir, target_dir_baseline, "target_dir"
+                )
+                cleanup_errors.extend(td_errs)
 
     # Combine scenario errors and cleanup errors
     all_case_errors = list(scenario_errors)
@@ -2351,11 +2425,181 @@ fi
 
 # 5. Subtest D: Controlled Failure-Path & Fault-Injection Regression Tests
 FAULT_OUTPUT=$(python3 -c '
-import subprocess, os, signal, tempfile, hashlib, sys
+import subprocess, os, signal, tempfile, hashlib, sys, stat
 
 SCRIPT_FILE = sys.argv[1]
 all_fault_tests_ok = True
 fault_details = []
+
+def safe_validate_and_cleanup_sentinel(sentinel_path, baseline, sentinel_name):
+    errors = []
+    if sentinel_path is None:
+        return True, errors
+
+    if not os.path.lexists(sentinel_path):
+        if baseline is not None:
+            errors.append(f"{sentinel_name} {sentinel_path} was deleted before cleanup")
+            return False, errors
+        return True, errors
+
+    if baseline is None:
+        errors.append(f"{sentinel_name} baseline unrecorded: preserving {sentinel_path}")
+        return False, errors
+
+    mismatches = []
+    if sentinel_path != baseline.get("path"):
+        mismatches.append(f"path mismatch ({sentinel_path} != {baseline.get('path')})")
+
+    if os.path.islink(sentinel_path):
+        mismatches.append("is symlink")
+    elif not os.path.isfile(sentinel_path):
+        mismatches.append("not regular file")
+    else:
+        fd = None
+        try:
+            fd = os.open(sentinel_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                mismatches.append("mode indicates not a regular file")
+            if st.st_uid != baseline.get("uid"):
+                mismatches.append(f"uid mismatch {st.st_uid} != {baseline.get('uid')}")
+            if st.st_uid != os.getuid():
+                mismatches.append(f"uid {st.st_uid} != current user {os.getuid()}")
+            if st.st_dev != baseline.get("dev") or st.st_ino != baseline.get("ino"):
+                mismatches.append("dev/ino changed")
+            if st.st_mode != baseline.get("mode"):
+                mismatches.append("mode changed")
+            if st.st_size != baseline.get("size"):
+                mismatches.append("size changed")
+            if st.st_mtime_ns != baseline.get("mtime_ns"):
+                mismatches.append("mtime changed")
+
+            h = hashlib.sha256()
+            while True:
+                chunk = os.read(fd, 65536)
+                if not chunk:
+                    break
+                h.update(chunk)
+            cur_hash = h.hexdigest()
+            if cur_hash != baseline.get("hash"):
+                mismatches.append("content hash changed")
+        except Exception as e:
+            mismatches.append(f"stat/read error: {e}")
+        finally:
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except Exception:
+                    pass
+
+    if mismatches:
+        reasons_str = "; ".join(mismatches)
+        errors.append(f"{sentinel_name} identity mismatch ({reasons_str}): preserving {sentinel_path}")
+        return False, errors
+
+    try:
+        os.unlink(sentinel_path)
+        return True, errors
+    except Exception as e:
+        errors.append(f"failed to unlink {sentinel_path}: {e}")
+        return False, errors
+
+def safe_validate_and_cleanup_dir(dir_path, baseline, dir_name):
+    errors = []
+    if dir_path is None:
+        return True, errors
+
+    if not os.path.lexists(dir_path):
+        if baseline is not None:
+            errors.append(f"{dir_name} {dir_path} was deleted before cleanup")
+            return False, errors
+        return True, errors
+
+    if baseline is None:
+        errors.append(f"{dir_name} baseline unrecorded: preserving {dir_path}")
+        return False, errors
+
+    mismatches = []
+    if dir_path != baseline.get("path"):
+        mismatches.append(f"path mismatch ({dir_path} != {baseline.get('path')})")
+
+    if os.path.islink(dir_path):
+        mismatches.append("is symlink")
+    elif not os.path.isdir(dir_path):
+        mismatches.append("not a directory")
+    else:
+        try:
+            st = os.stat(dir_path)
+            if not stat.S_ISDIR(st.st_mode):
+                mismatches.append("mode indicates not a directory")
+            if st.st_uid != baseline.get("uid") or st.st_uid != os.getuid():
+                mismatches.append(f"uid mismatch {st.st_uid}")
+            if st.st_dev != baseline.get("dev") or st.st_ino != baseline.get("ino"):
+                mismatches.append("dev/ino changed")
+            if "mode" in baseline and st.st_mode != baseline.get("mode"):
+                mismatches.append("mode changed")
+        except Exception as e:
+            mismatches.append(f"stat error: {e}")
+
+    if mismatches:
+        reasons_str = "; ".join(mismatches)
+        errors.append(f"{dir_name} identity mismatch ({reasons_str}): preserving {dir_path}")
+        return False, errors
+
+    try:
+        os.rmdir(dir_path)
+        return True, errors
+    except Exception as e:
+        errors.append(f"failed to rmdir {dir_path}: {e}")
+        return False, errors
+
+def safe_validate_and_cleanup_symlink(link_path, baseline, link_name):
+    errors = []
+    if link_path is None:
+        return True, errors
+
+    if not os.path.lexists(link_path):
+        if baseline is not None:
+            errors.append(f"{link_name} {link_path} was deleted before cleanup")
+            return False, errors
+        return True, errors
+
+    if baseline is None:
+        errors.append(f"{link_name} baseline unrecorded: preserving {link_path}")
+        return False, errors
+
+    mismatches = []
+    if link_path != baseline.get("path"):
+        mismatches.append(f"path mismatch ({link_path} != {baseline.get('path')})")
+
+    if not os.path.islink(link_path):
+        mismatches.append("not a symlink")
+    else:
+        try:
+            target = os.readlink(link_path)
+            if "target" in baseline and target != baseline["target"]:
+                mismatches.append(f"target mismatch ({target} != {baseline['target']})")
+            st = os.lstat(link_path)
+            if not stat.S_ISLNK(st.st_mode):
+                mismatches.append("mode indicates not a symlink")
+            if st.st_uid != baseline.get("uid") or st.st_uid != os.getuid():
+                mismatches.append(f"uid mismatch {st.st_uid}")
+            if st.st_dev != baseline.get("dev") or st.st_ino != baseline.get("ino"):
+                mismatches.append("dev/ino changed")
+        except Exception as e:
+            mismatches.append(f"stat error: {e}")
+
+    if mismatches:
+        reasons_str = "; ".join(mismatches)
+        errors.append(f"{link_name} identity mismatch ({reasons_str}): preserving {link_path}")
+        return False, errors
+
+    try:
+        os.unlink(link_path)
+        return True, errors
+    except Exception as e:
+        errors.append(f"failed to unlink {link_path}: {e}")
+        return False, errors
 
 def run_fault_case(name, fn):
     global all_fault_tests_ok
@@ -2378,19 +2622,18 @@ def test_setup_exception_after_target_dir():
     try:
         target_dir = tempfile.mkdtemp(prefix="pipejack-fault-td-", dir="/tmp")
         st = os.stat(target_dir)
-        target_dir_baseline = {"path": target_dir, "dev": st.st_dev, "ino": st.st_ino, "uid": st.st_uid}
+        target_dir_baseline = {
+            "path": target_dir, "dev": st.st_dev, "ino": st.st_ino,
+            "uid": st.st_uid, "mode": st.st_mode
+        }
         raise RuntimeError("injected setup exception after target dir creation")
     except RuntimeError:
         pass
     finally:
-        if target_dir is not None and os.path.lexists(target_dir):
-            st = os.stat(target_dir)
-            if (not os.path.islink(target_dir) and os.path.isdir(target_dir) and
-                st.st_uid == os.getuid() and st.st_dev == target_dir_baseline["dev"] and
-                st.st_ino == target_dir_baseline["ino"]):
-                os.rmdir(target_dir)
-            else:
-                cleanup_errors.append(f"preserving {target_dir}")
+        cleaned_td, td_errs = safe_validate_and_cleanup_dir(
+            target_dir, target_dir_baseline, "target_dir"
+        )
+        cleanup_errors.extend(td_errs)
     
     if os.path.lexists(target_dir):
         return False, f"target_dir {target_dir} was not cleaned up after setup exception"
@@ -2402,11 +2645,29 @@ def test_setup_exception_after_target_dir():
 def test_exception_before_sentinel_identity_recorded():
     target_dir = tempfile.mkdtemp(prefix="pipejack-fault-unrec-", dir="/tmp")
     td_st = os.stat(target_dir)
-    target_dir_baseline = {"path": target_dir, "dev": td_st.st_dev, "ino": td_st.st_ino, "uid": td_st.st_uid}
+    target_dir_baseline = {
+        "path": target_dir, "dev": td_st.st_dev, "ino": td_st.st_ino,
+        "uid": td_st.st_uid, "mode": td_st.st_mode
+    }
+    teardown_dir_baseline = dict(target_dir_baseline)
     
     target_sentinel = os.path.join(target_dir, "sentinel.dat")
     with open(target_sentinel, "w") as f:
         f.write("partial")
+    
+    ts_st = os.stat(target_sentinel)
+    with open(target_sentinel, "rb") as f:
+        ts_hash = hashlib.sha256(f.read()).hexdigest()
+    teardown_sentinel_baseline = {
+        "path": target_sentinel,
+        "dev": ts_st.st_dev,
+        "ino": ts_st.st_ino,
+        "mode": ts_st.st_mode,
+        "uid": ts_st.st_uid,
+        "size": ts_st.st_size,
+        "mtime_ns": ts_st.st_mtime_ns,
+        "hash": ts_hash,
+    }
     
     target_sentinel_baseline = None
     cleanup_errors = []
@@ -2414,34 +2675,42 @@ def test_exception_before_sentinel_identity_recorded():
     try:
         pass
     finally:
-        sentinel_cleaned = False
-        if target_sentinel is not None:
-            if not os.path.lexists(target_sentinel):
-                sentinel_cleaned = True
-            elif target_sentinel_baseline is None:
-                cleanup_errors.append(f"target_sentinel baseline unrecorded: preserving {target_sentinel}")
-            else:
-                os.unlink(target_sentinel)
-                sentinel_cleaned = True
+        sentinel_cleaned, ts_errs = safe_validate_and_cleanup_sentinel(
+            target_sentinel, target_sentinel_baseline, "target_sentinel"
+        )
+        cleanup_errors.extend(ts_errs)
 
         if target_dir is not None:
             if not sentinel_cleaned and os.path.lexists(target_sentinel):
                 cleanup_errors.append(f"target_dir {target_dir} preserved because sentinel could not be cleaned")
-            elif os.path.lexists(target_dir):
-                os.rmdir(target_dir)
+            else:
+                cleaned_td, td_errs = safe_validate_and_cleanup_dir(
+                    target_dir, target_dir_baseline, "target_dir"
+                )
+                cleanup_errors.extend(td_errs)
 
     preserved = os.path.lexists(target_sentinel)
     reported = any("baseline unrecorded: preserving" in ce for ce in cleanup_errors)
     
-    if os.path.lexists(target_sentinel):
-        os.unlink(target_sentinel)
-    if os.path.lexists(target_dir):
-        os.rmdir(target_dir)
+    # Safe teardown using independent teardown identity
+    teardown_errors = []
+    cleaned_ts, ts_td_errs = safe_validate_and_cleanup_sentinel(
+        target_sentinel, teardown_sentinel_baseline, "teardown_sentinel"
+    )
+    teardown_errors.extend(ts_td_errs)
+
+    if cleaned_ts:
+        cleaned_td, td_td_errs = safe_validate_and_cleanup_dir(
+            target_dir, teardown_dir_baseline, "teardown_dir"
+        )
+        teardown_errors.extend(td_td_errs)
         
     if not preserved:
         return False, "unrecorded sentinel was deleted blindly"
     if not reported:
         return False, f"cleanup failure was not reported: {cleanup_errors}"
+    if teardown_errors or os.path.lexists(target_sentinel) or os.path.lexists(target_dir):
+        return False, f"teardown failed: {teardown_errors}"
     return True, "preserved_and_reported"
 
 # Fault 3: Mocked subprocess-launch exception
@@ -2468,20 +2737,15 @@ def test_mocked_subprocess_launch_exception():
     except Exception as e:
         scenario_errors.append(f"Subprocess launch failed: {e}")
     finally:
-        if failed_sentinel_baseline is not None and os.path.lexists(failed_sentinel):
-            cur_st = os.stat(failed_sentinel)
-            if (not os.path.islink(failed_sentinel) and os.path.isfile(failed_sentinel) and
-                cur_st.st_uid == os.getuid() and cur_st.st_dev == failed_sentinel_baseline["dev"] and
-                cur_st.st_ino == failed_sentinel_baseline["ino"] and
-                cur_st.st_size == failed_sentinel_baseline["size"]):
-                os.unlink(failed_sentinel)
-            else:
-                cleanup_errors.append(f"preserving {failed_sentinel}")
+        cleaned_fs, fs_errs = safe_validate_and_cleanup_sentinel(
+            failed_sentinel, failed_sentinel_baseline, "failed_sentinel"
+        )
+        cleanup_errors.extend(fs_errs)
 
     cleaned = not os.path.lexists(failed_sentinel)
     reported = any("Subprocess launch failed" in se for se in scenario_errors)
-    if not cleaned:
-        return False, "sentinel was not cleaned up after launch failure"
+    if not cleaned or cleanup_errors:
+        return False, f"sentinel was not cleaned up after launch failure: {cleanup_errors}"
     if not reported:
         return False, "launch exception was not recorded in scenario errors"
     return True, "cleaned_and_reported"
@@ -2505,40 +2769,56 @@ def test_sentinel_content_mismatch_preservation():
     with open(failed_sentinel, "ab") as f:
         f.write(b"-TAMPERED")
 
+    tampered_st = os.stat(failed_sentinel)
+    with open(failed_sentinel, "rb") as f:
+        tampered_hash = hashlib.sha256(f.read()).hexdigest()
+    teardown_sentinel_baseline = {
+        "path": failed_sentinel,
+        "dev": tampered_st.st_dev,
+        "ino": tampered_st.st_ino,
+        "mode": tampered_st.st_mode,
+        "uid": tampered_st.st_uid,
+        "size": tampered_st.st_size,
+        "mtime_ns": tampered_st.st_mtime_ns,
+        "hash": tampered_hash,
+    }
+
     cleanup_errors = []
     try:
         pass
     finally:
-        cur_st = os.stat(failed_sentinel)
-        with open(failed_sentinel, "rb") as f:
-            cur_h = hashlib.sha256(f.read()).hexdigest()
-        mismatches = []
-        if cur_h != failed_sentinel_baseline["hash"]:
-            mismatches.append("content hash changed")
-        if cur_st.st_size != failed_sentinel_baseline["size"]:
-            mismatches.append("size changed")
-        
-        if mismatches:
-            reasons_str = "; ".join(mismatches)
-            cleanup_errors.append(f"failed_sentinel identity mismatch ({reasons_str}): preserving {failed_sentinel}")
-        else:
-            os.unlink(failed_sentinel)
+        cleaned, se_errs = safe_validate_and_cleanup_sentinel(
+            failed_sentinel, failed_sentinel_baseline, "failed_sentinel"
+        )
+        cleanup_errors.extend(se_errs)
 
     preserved = os.path.lexists(failed_sentinel)
     reported = any("identity mismatch" in ce for ce in cleanup_errors)
     
-    if os.path.lexists(failed_sentinel):
-        os.unlink(failed_sentinel)
+    # Safe teardown using independent teardown identity
+    teardown_errors = []
+    cleaned_teardown, td_errs = safe_validate_and_cleanup_sentinel(
+        failed_sentinel, teardown_sentinel_baseline, "teardown_tampered_sentinel"
+    )
+    teardown_errors.extend(td_errs)
 
     if not preserved:
         return False, "tampered sentinel was deleted instead of preserved"
     if not reported:
         return False, f"identity mismatch cleanup failure was not reported: {cleanup_errors}"
+    if not cleaned_teardown or teardown_errors or os.path.lexists(failed_sentinel):
+        return False, f"teardown failed to safely clean verified tampered fixture: {teardown_errors}"
     return True, "preserved_and_reported"
 
 # Fault 5: Race-hook type or target verification failure
 def test_race_hook_target_verification_failure():
     target_dir = tempfile.mkdtemp(prefix="pipejack-fault-hook-", dir="/tmp")
+    st = os.stat(target_dir)
+    target_dir_baseline = {
+        "path": target_dir, "dev": st.st_dev, "ino": st.st_ino,
+        "uid": st.st_uid, "mode": st.st_mode
+    }
+    teardown_errors = []
     try:
         res = subprocess.run(
             ["bash", SCRIPT_FILE, "--internal-test-creation-race", "hook_fail_target", "INT", target_dir],
@@ -2546,8 +2826,10 @@ def test_race_hook_target_verification_failure():
             text=True
         )
     finally:
-        if os.path.lexists(target_dir):
-            os.rmdir(target_dir)
+        cleaned_td, td_errs = safe_validate_and_cleanup_dir(
+            target_dir, target_dir_baseline, "target_dir"
+        )
+        teardown_errors.extend(td_errs)
 
     verify_failed = ("RACE_FIXTURE_VERIFY_FAILED:" in res.stdout and "target_mismatch" in res.stdout)
     rc_failed = (res.returncode == 1)
@@ -2559,31 +2841,50 @@ def test_race_hook_target_verification_failure():
         return False, f"child returncode was {res.returncode}, expected 1"
     if not cleaned:
         return False, f"failed hook fixture was not cleaned up: stdout={res.stdout}"
+    if teardown_errors or os.path.lexists(target_dir):
+        return False, f"teardown failed to safely clean verified target_dir: {teardown_errors}"
     return True, "verified_and_cleaned"
 
 # Fault 6: Race-hook unverified pattern preservation
 def test_race_hook_unverified_pattern_preservation():
+    test_link = f"/tmp/unverified-forbidden-pattern-link-{os.getpid()}"
+    if os.path.lexists(test_link):
+        try:
+            os.unlink(test_link)
+        except Exception:
+            pass
+    os.symlink("/tmp", test_link)
+    st = os.lstat(test_link)
+    teardown_link_baseline = {
+        "path": test_link,
+        "dev": st.st_dev,
+        "ino": st.st_ino,
+        "uid": st.st_uid,
+        "target": "/tmp",
+    }
+    
     res = subprocess.run(
-        ["bash", SCRIPT_FILE, "--internal-test-creation-race", "hook_fail_unverified_pattern", "INT"],
+        ["bash", SCRIPT_FILE, "--internal-test-creation-race", "hook_fail_unverified_pattern", "INT", test_link],
         capture_output=True,
         text=True
     )
     verify_failed = ("RACE_FIXTURE_VERIFY_FAILED:" in res.stdout)
     preserved_reported = ("RACE_FIXTURE_PRESERVED:" in res.stdout and "unexpected_basename_pattern" in res.stdout)
-    
-    for line in res.stdout.splitlines():
-        if "RACE_FIXTURE_PRESERVED:path=" in line:
-            parts = line.split(":")
-            for p in parts:
-                if p.startswith("path="):
-                    p_path = p.split("=", 1)[1]
-                    if os.path.lexists(p_path):
-                        os.unlink(p_path)
+    preserved = os.path.lexists(test_link)
+
+    # Safe teardown using independent teardown identity
+    cleaned_link, link_errs = safe_validate_and_cleanup_symlink(
+        test_link, teardown_link_baseline, "unverified_pattern_fixture"
+    )
 
     if not verify_failed:
         return False, f"missing verify failed: stdout={res.stdout}"
     if not preserved_reported:
         return False, f"unverified pattern residue was not preserved/reported: stdout={res.stdout}"
+    if not preserved:
+        return False, "unverified pattern fixture was deleted by safety hook instead of preserved"
+    if not cleaned_link or link_errs or os.path.lexists(test_link):
+        return False, f"teardown failed to safely clean verified fixture: {link_errs}"
     return True, "preserved_and_reported"
 
 run_fault_case("setup_exception_cleanup", test_setup_exception_after_target_dir)
