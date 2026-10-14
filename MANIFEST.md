@@ -25,7 +25,7 @@
 | `shared/templates/01-netplan-vm2.yaml.example` | 498 | `0644` | Root / Shared | `1ccffbb5653831239e011077b644e794b8848d6f9571ef9a27fb83f6d2aee43a` |
 | `shared/templates/hosts.example` | 155 | `0644` | Root / Shared | `27baa2f36776d67d9bb6330371f8c5d7b538bfde3aa6c05f74c353436cc34e36` |
 | `tests/smoke-test.sh` | 5757 | `0755` | Testing / CI | `d8ea4cd1d742de739c4aaa0f043e9300f43b52510ce92347d94953fae1dac4e5` |
-| `tests/test-fresh-install-blockers.sh` | 83867 | `0775` | Testing / CI | `d27b3d5bbe4915f864b3dd37009912a173a2ec32a66f2a4c6e7138aa4b2b3dab` |
+| `tests/test-fresh-install-blockers.sh` | 91972 | `0775` | Testing / CI | `6766093141cb0daea2de43d21e48aefc5c474d70a341a0aa3f00fa9b29c74d55` |
 | `tests/validate-installers.sh` | 6182 | `0775` | Testing / CI | `804aad743bd20f21b65fe44a13d3015909934ad81a8c5056b1d45a9cf56ae504` |
 | `tests/validate-layout.sh` | 6313 | `0755` | Testing / CI | `13f7ca85f117fee8ce619f8ce0515f699b29c709fc8e2f4f09d4b0683de6af47` |
 | `vm1/README.md` | 4720 | `0664` | VM1 (Client) | `fdbb1d628cfdc29c042046084649fcb9b293f9504955c630938ade53ff495d78` |
