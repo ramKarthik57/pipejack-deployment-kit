@@ -522,13 +522,13 @@ create_safe_tmp_dir() {
     created=$(mktemp -d "$@" 2>/dev/null || echo "")
     if [ -n "$created" ]; then
         if [ -n "${TEST_RACE_HOOK:-}" ]; then
-            "$TEST_RACE_HOOK" "$created"
+            "$TEST_RACE_HOOK" "$created" "dir"
         fi
         register_test_path "$created"
         printf -v "$out_var" '%s' "$created"
     else
         if [ -n "${TEST_RACE_FAIL_HOOK:-}" ]; then
-            "$TEST_RACE_FAIL_HOOK"
+            "$TEST_RACE_FAIL_HOOK" "tmp_dir"
         fi
     fi
     resume_signals
@@ -543,13 +543,13 @@ create_safe_tmp_file() {
     created=$(mktemp "$@" 2>/dev/null || echo "")
     if [ -n "$created" ]; then
         if [ -n "${TEST_RACE_HOOK:-}" ]; then
-            "$TEST_RACE_HOOK" "$created"
+            "$TEST_RACE_HOOK" "$created" "file"
         fi
         register_test_path "$created"
         printf -v "$out_var" '%s' "$created"
     else
         if [ -n "${TEST_RACE_FAIL_HOOK:-}" ]; then
-            "$TEST_RACE_FAIL_HOOK"
+            "$TEST_RACE_FAIL_HOOK" "tmp_file"
         fi
     fi
     resume_signals
@@ -566,13 +566,13 @@ create_safe_outside_dir() {
     fi
     if [ -n "$created" ]; then
         if [ -n "${TEST_RACE_HOOK:-}" ]; then
-            "$TEST_RACE_HOOK" "$created"
+            "$TEST_RACE_HOOK" "$created" "dir"
         fi
         register_outside_fixture "$created" "dir"
         printf -v "$out_var" '%s' "$created"
     else
         if [ -n "${TEST_RACE_FAIL_HOOK:-}" ]; then
-            "$TEST_RACE_FAIL_HOOK"
+            "$TEST_RACE_FAIL_HOOK" "outside_dir"
         fi
     fi
     resume_signals
@@ -588,7 +588,7 @@ create_safe_symlink() {
     if ln -s "$target" "$link_path" 2>/dev/null; then
         ok=1
         if [ -n "${TEST_RACE_HOOK:-}" ]; then
-            "$TEST_RACE_HOOK" "$link_path"
+            "$TEST_RACE_HOOK" "$link_path" "symlink"
         fi
         if [ "$loc" = "outside" ]; then
             register_outside_fixture "$link_path" "symlink"
@@ -597,7 +597,7 @@ create_safe_symlink() {
         fi
     else
         if [ -n "${TEST_RACE_FAIL_HOOK:-}" ]; then
-            "$TEST_RACE_FAIL_HOOK"
+            "$TEST_RACE_FAIL_HOOK" "$link_path"
         fi
     fi
     resume_signals
@@ -611,11 +611,11 @@ create_safe_nested_dir() {
     if mkdir -p "$dir_path" 2>/dev/null; then
         ok=1
         if [ -n "${TEST_RACE_HOOK:-}" ]; then
-            "$TEST_RACE_HOOK" "$dir_path"
+            "$TEST_RACE_HOOK" "$dir_path" "dir"
         fi
     else
         if [ -n "${TEST_RACE_FAIL_HOOK:-}" ]; then
-            "$TEST_RACE_FAIL_HOOK"
+            "$TEST_RACE_FAIL_HOOK" "$dir_path"
         fi
     fi
     resume_signals
@@ -656,7 +656,19 @@ if [ "${1:-}" = "--internal-test-creation-race" ]; then
 
     deliver_race_signal() {
         local fixture="$1"
-        echo "RACE_FIXTURE_CREATED:$fixture"
+        local ftype="${2:-}"
+        if [ -z "$ftype" ]; then
+            if [ -L "$fixture" ]; then
+                ftype="symlink"
+            elif [ -d "$fixture" ]; then
+                ftype="dir"
+            elif [ -f "$fixture" ]; then
+                ftype="file"
+            else
+                ftype="unknown"
+            fi
+        fi
+        echo "RACE_FIXTURE_CREATED:$fixture:$ftype"
         case "$SIG_NAME" in
             TERM) kill -TERM $$ ;;
             HUP)  kill -HUP $$ ;;
@@ -666,6 +678,8 @@ if [ "${1:-}" = "--internal-test-creation-race" ]; then
     TEST_RACE_HOOK="deliver_race_signal"
 
     deliver_fail_signal() {
+        local path_or_info="${1:-}"
+        echo "RACE_FAIL_HOOK_FIRED:$path_or_info"
         case "$SIG_NAME" in
             TERM) kill -TERM $$ ;;
             HUP)  kill -HUP $$ ;;
@@ -682,10 +696,18 @@ if [ "${1:-}" = "--internal-test-creation-race" ]; then
             create_safe_outside_dir FIXTURE "pipejack-boundary-test-XXXXXX"
             ;;
         tmp_symlink)
+            if [ -z "$TARGET_PARAM" ] || [ ! -d "$TARGET_PARAM" ]; then
+                echo "[-] tmp_symlink requires existing directory TARGET_PARAM" >&2
+                exit 1
+            fi
             LINK="/tmp/pipejack-race-link-$$"
             create_safe_symlink "$TARGET_PARAM" "$LINK" "tmp"
             ;;
         outside_symlink)
+            if [ -z "$TARGET_PARAM" ] || [ ! -d "$TARGET_PARAM" ]; then
+                echo "[-] outside_symlink requires existing directory TARGET_PARAM" >&2
+                exit 1
+            fi
             LINK="/var/tmp/pipejack-boundary-test-link-$$"
             create_safe_symlink "$TARGET_PARAM" "$LINK" "outside"
             ;;
@@ -695,7 +717,11 @@ if [ "${1:-}" = "--internal-test-creation-race" ]; then
             create_safe_symlink "$TARGET" "$LINK" "outside"
             ;;
         failed_creation)
-            create_safe_tmp_dir FIXTURE "/nonexistent_race_dir_12345/test-XXXXXX"
+            if [ -z "$TARGET_PARAM" ] || [ ! -e "$TARGET_PARAM" ]; then
+                echo "[-] failed_creation requires existing TARGET_PARAM sentinel" >&2
+                exit 1
+            fi
+            create_safe_symlink "/tmp/pipejack-dummy-target-$$" "$TARGET_PARAM" "tmp"
             ;;
         *)
             echo "[-] Unknown race test mode: $RACE_MODE" >&2
@@ -1726,47 +1752,141 @@ if ! echo "$SIG_OUTPUT" | grep -q "^STATUS:PASS"; then
 fi
 
 # 4. Subtest C: Deterministic creation-to-registration interrupt race regression tests
-RACE_OUTPUT=$(python3 -c "
-import subprocess, os, signal
+RACE_OUTPUT=$(python3 -c '
+import subprocess, os, signal, tempfile, hashlib, sys
 
-SCRIPT_FILE = '$SCRIPT_FILE'
-all_race_ok = True
-details = []
+SCRIPT_FILE = sys.argv[1]
 
-race_scenarios = [
-    ('tmp_dir', 'INT', 130),
-    ('tmp_dir', 'TERM', 143),
-    ('tmp_dir', 'HUP', 129),
-    ('outside_dir', 'INT', 130),
-    ('outside_dir', 'TERM', 143),
-    ('outside_dir', 'HUP', 129),
-    ('tmp_symlink', 'INT', 130),
-    ('tmp_symlink', 'TERM', 143),
-    ('tmp_symlink', 'HUP', 129),
-    ('outside_symlink', 'INT', 130),
-    ('outside_symlink', 'TERM', 143),
-    ('outside_symlink', 'HUP', 129),
-    ('outside_dangling_symlink', 'INT', 130),
-    ('outside_dangling_symlink', 'TERM', 143),
-    ('outside_dangling_symlink', 'HUP', 129),
-    ('failed_creation', 'INT', 130),
-    ('failed_creation', 'TERM', 143),
-    ('failed_creation', 'HUP', 129),
+STANDARD_TMP_ARCHIVES = [
+    "/tmp/banking-api-clean.tar.gz",
+    "/tmp/banking-api-malicious.tar.gz",
+    "/tmp/calculator-api.tar.gz",
+    "/tmp/nodejs-app-clean.tar.gz",
+    "/tmp/python-app-clean.tar.gz",
+    "/tmp/nodejs-app-malicious.tar.gz",
+    "/tmp/python-app-malicious.tar.gz",
+    "/tmp/evil-pkg-1.0.0.tgz",
+    "/tmp/attack-01-shell-exec.tar.gz",
+    "/tmp/attack-02-http-exfil.tar.gz",
+    "/tmp/attack-03-fs-tamper.tar.gz",
+    "/tmp/attack-04-base64-shell.tar.gz",
+    "/tmp/attack-05-multi-stage.tar.gz",
+    "/tmp/attack-06-slow-exfil.tar.gz",
+    "/tmp/attack-07-anomaly.tar.gz",
 ]
 
-for mode, sig, exp_rc in race_scenarios:
-    target = None
-    canary = None
-    if mode == 'tmp_symlink':
-        target = subprocess.run(['mktemp', '-d', '/tmp/pipejack-ext-target-XXXXXX'], capture_output=True, text=True).stdout.strip()
-    elif mode == 'outside_symlink':
-        target = subprocess.run(['mktemp', '-d', '-p', '/var/tmp', 'pipejack-boundary-target-XXXXXX'], capture_output=True, text=True).stdout.strip()
-    elif mode == 'failed_creation':
-        canary = subprocess.run(['mktemp', '/tmp/pipejack-ext-canary-XXXXXX'], capture_output=True, text=True).stdout.strip()
+# Snapshot standard archives before running race scenarios
+archive_pre_state = {}
+for arch in STANDARD_TMP_ARCHIVES:
+    if os.path.exists(arch):
+        st = os.stat(arch)
+        with open(arch, "rb") as f:
+            h = hashlib.sha256(f.read()).hexdigest()
+        archive_pre_state[arch] = (st.st_size, st.st_mtime_ns, h)
+    else:
+        archive_pre_state[arch] = None
 
-    args = ['bash', SCRIPT_FILE, '--internal-test-creation-race', mode, sig]
-    if target:
-        args.append(target)
+race_scenarios = [
+    ("tmp_dir", "INT", 130),
+    ("tmp_dir", "TERM", 143),
+    ("tmp_dir", "HUP", 129),
+    ("outside_dir", "INT", 130),
+    ("outside_dir", "TERM", 143),
+    ("outside_dir", "HUP", 129),
+    ("tmp_symlink", "INT", 130),
+    ("tmp_symlink", "TERM", 143),
+    ("tmp_symlink", "HUP", 129),
+    ("outside_symlink", "INT", 130),
+    ("outside_symlink", "TERM", 143),
+    ("outside_symlink", "HUP", 129),
+    ("outside_dangling_symlink", "INT", 130),
+    ("outside_dangling_symlink", "TERM", 143),
+    ("outside_dangling_symlink", "HUP", 129),
+    ("failed_creation", "INT", 130),
+    ("failed_creation", "TERM", 143),
+    ("failed_creation", "HUP", 129),
+]
+
+passed_scenarios = []
+failed_scenarios = []
+skipped_scenarios = []
+details = []
+
+for mode, sig, exp_rc in race_scenarios:
+    scenario_id = f"{mode}_{sig}"
+    setup_ok = True
+    target_dir = None
+    target_sentinel = None
+    target_sentinel_hash = None
+    target_sentinel_size = None
+    failed_sentinel = None
+    failed_sentinel_stat = None
+    failed_sentinel_hash = None
+    setup_err = ""
+
+    try:
+        if mode == "tmp_symlink":
+            target_dir = tempfile.mkdtemp(prefix="pipejack-target-tmp-", dir="/tmp")
+            target_sentinel = os.path.join(target_dir, "sentinel.dat")
+            content = f"tmp-target-data-{sig}-{os.getpid()}".encode()
+            with open(target_sentinel, "wb") as f:
+                f.write(content)
+            if not (os.path.isdir(target_dir) and os.path.isfile(target_sentinel)):
+                setup_ok = False
+                setup_err = "target dir/sentinel creation failed"
+            else:
+                target_sentinel_hash = hashlib.sha256(content).hexdigest()
+                target_sentinel_size = len(content)
+
+        elif mode == "outside_symlink":
+            if not os.path.isdir("/var/tmp") or not os.access("/var/tmp", os.W_OK):
+                setup_ok = False
+                setup_err = "/var/tmp not writable"
+            else:
+                target_dir = tempfile.mkdtemp(prefix="pipejack-target-out-", dir="/var/tmp")
+                target_sentinel = os.path.join(target_dir, "sentinel.dat")
+                content = f"out-target-data-{sig}-{os.getpid()}".encode()
+                with open(target_sentinel, "wb") as f:
+                    f.write(content)
+                if not (os.path.isdir(target_dir) and os.path.isfile(target_sentinel)):
+                    setup_ok = False
+                    setup_err = "outside target dir/sentinel creation failed"
+                else:
+                    target_sentinel_hash = hashlib.sha256(content).hexdigest()
+                    target_sentinel_size = len(content)
+
+        elif mode == "failed_creation":
+            fd, failed_sentinel = tempfile.mkstemp(prefix="pipejack-fail-sentinel-", dir="/tmp")
+            content = f"fail-sentinel-data-{sig}-{os.getpid()}".encode()
+            os.write(fd, content)
+            os.close(fd)
+            if not os.path.isfile(failed_sentinel):
+                setup_ok = False
+                setup_err = "failed_sentinel creation failed"
+            else:
+                st = os.stat(failed_sentinel)
+                failed_sentinel_stat = (st.st_size, st.st_mtime_ns, st.st_ino, st.st_mode, st.st_uid)
+                failed_sentinel_hash = hashlib.sha256(content).hexdigest()
+
+        elif mode in ("outside_dir", "outside_dangling_symlink"):
+            if not os.path.isdir("/var/tmp") or not os.access("/var/tmp", os.W_OK):
+                setup_ok = False
+                setup_err = "/var/tmp not writable"
+    except Exception as e:
+        setup_ok = False
+        setup_err = str(e)
+
+    if not setup_ok:
+        failed_scenarios.append((scenario_id, f"Setup failed: {setup_err}"))
+        details.append(f"{scenario_id}:SETUP_FAIL({setup_err})")
+        continue
+
+    # Build child arguments
+    args = ["bash", SCRIPT_FILE, "--internal-test-creation-race", mode, sig]
+    if target_dir:
+        args.append(target_dir)
+    elif failed_sentinel:
+        args.append(failed_sentinel)
 
     res = subprocess.run(
         args,
@@ -1775,30 +1895,145 @@ for mode, sig, exp_rc in race_scenarios:
         preexec_fn=lambda: signal.signal(signal.SIGHUP, signal.SIG_DFL)
     )
 
-    fixture = None
+    # Parse child output
+    fixture_path = None
+    fixture_type = None
+    fail_hook_fired = False
+
     for line in res.stdout.splitlines():
-        if line.startswith('RACE_FIXTURE_CREATED:'):
-            fixture = line.split(':', 1)[1].strip()
+        if line.startswith("RACE_FIXTURE_CREATED:"):
+            parts = line.split(":", 2)
+            if len(parts) >= 2:
+                fixture_path = parts[1].strip()
+            if len(parts) >= 3:
+                fixture_type = parts[2].strip()
+        elif line.startswith("RACE_FAIL_HOOK_FIRED:"):
+            fail_hook_fired = True
 
-    rc_ok = (res.returncode == exp_rc)
-    unreached_ok = ('SHOULD_NOT_REACH_HERE' not in res.stdout)
-    fixture_cleaned = (not fixture or (not os.path.exists(fixture) and not os.path.lexists(fixture)))
-    target_preserved = (not target or os.path.exists(target))
-    canary_preserved = (not canary or os.path.exists(canary))
+    errors = []
 
-    case_ok = rc_ok and unreached_ok and fixture_cleaned and target_preserved and canary_preserved
-    if not case_ok:
-        all_race_ok = False
-    details.append(f'{mode}({sig}):rc={res.returncode}(exp {exp_rc}),cleaned={fixture_cleaned},target_ok={target_preserved}')
+    # Check return code and unreached marker
+    if res.returncode != exp_rc:
+        errors.append(f"rc={res.returncode}(expected {exp_rc})")
+    if "SHOULD_NOT_REACH_HERE" in res.stdout:
+        errors.append("reached SHOULD_NOT_REACH_HERE")
 
-    if target and os.path.lexists(target):
-        subprocess.run(['rm', '-rf', target])
-    if canary and os.path.lexists(canary):
-        subprocess.run(['rm', '-f', canary])
+    if mode == "failed_creation":
+        # Failed creation assertions
+        if not fail_hook_fired:
+            errors.append("fail hook did not fire")
+        if fixture_path is not None:
+            errors.append(f"unexpected fixture created: {fixture_path}")
+        if not os.path.lexists(failed_sentinel):
+            errors.append("pre-existing sentinel was deleted")
+        elif os.path.islink(failed_sentinel):
+            errors.append("pre-existing sentinel turned into symlink")
+        else:
+            st = os.stat(failed_sentinel)
+            cur_stat = (st.st_size, st.st_mtime_ns, st.st_ino, st.st_mode, st.st_uid)
+            if cur_stat != failed_sentinel_stat:
+                errors.append(f"sentinel metadata modified: cur={cur_stat} orig={failed_sentinel_stat}")
+            with open(failed_sentinel, "rb") as f:
+                cur_hash = hashlib.sha256(f.read()).hexdigest()
+            if cur_hash != failed_sentinel_hash:
+                errors.append("sentinel content modified")
 
-status = 'PASS' if all_race_ok else 'FAIL'
-print(f'STATUS:{status}|' + '; '.join(details))
-" 2>&1)
+        # Cleanup failed_sentinel
+        if os.path.lexists(failed_sentinel):
+            if os.stat(failed_sentinel).st_uid == os.getuid():
+                os.unlink(failed_sentinel)
+            else:
+                errors.append("sentinel ownership mismatch on cleanup")
+
+    else:
+        # Positive fixture creation assertions
+        if not fixture_path:
+            errors.append("missing RACE_FIXTURE_CREATED output")
+        else:
+            # Check expected parent directory
+            canon_parent = os.path.realpath(os.path.dirname(fixture_path))
+            if mode in ("tmp_dir", "tmp_symlink"):
+                expected_parent = os.path.realpath("/tmp")
+            else:
+                expected_parent = os.path.realpath("/var/tmp")
+            if canon_parent != expected_parent:
+                errors.append(f"parent dir mismatch: {canon_parent} != {expected_parent}")
+
+            # Check expected fixture type
+            exp_type = "dir" if mode in ("tmp_dir", "outside_dir") else "symlink"
+            if fixture_type != exp_type:
+                errors.append(f"fixture type mismatch: {fixture_type} != {exp_type}")
+
+            # Check fixture cleanup
+            if os.path.lexists(fixture_path):
+                errors.append(f"fixture was not cleaned up: {fixture_path}")
+
+        # Target preservation for symlink modes
+        if target_dir:
+            if not os.path.isdir(target_dir):
+                errors.append(f"target dir deleted: {target_dir}")
+            elif not os.path.isfile(target_sentinel):
+                errors.append(f"target sentinel deleted: {target_sentinel}")
+            else:
+                st = os.stat(target_sentinel)
+                if st.st_size != target_sentinel_size:
+                    errors.append(f"target sentinel size mismatch: {st.st_size} != {target_sentinel_size}")
+                with open(target_sentinel, "rb") as f:
+                    cur_hash = hashlib.sha256(f.read()).hexdigest()
+                if cur_hash != target_sentinel_hash:
+                    errors.append("target sentinel content modified")
+
+            # Clean up target_dir
+            if os.path.lexists(target_dir):
+                if os.stat(target_dir).st_uid == os.getuid():
+                    if os.path.lexists(target_sentinel):
+                        os.unlink(target_sentinel)
+                    os.rmdir(target_dir)
+                else:
+                    errors.append("target_dir ownership mismatch on cleanup")
+
+    if errors:
+        failed_scenarios.append((scenario_id, ", ".join(errors)))
+        details.append(f"{scenario_id}:FAIL({", ".join(errors)})")
+    else:
+        passed_scenarios.append(scenario_id)
+        details.append(f"{scenario_id}:PASS")
+
+# Verify standard archives after all race iterations
+archives_intact = True
+archive_errors = []
+for arch in STANDARD_TMP_ARCHIVES:
+    pre = archive_pre_state[arch]
+    if pre is None:
+        if os.path.lexists(arch):
+            archives_intact = False
+            archive_errors.append(f"{arch}:created")
+    else:
+        if not os.path.exists(arch):
+            archives_intact = False
+            archive_errors.append(f"{arch}:deleted")
+        else:
+            st = os.stat(arch)
+            with open(arch, "rb") as f:
+                h = hashlib.sha256(f.read()).hexdigest()
+            cur = (st.st_size, st.st_mtime_ns, h)
+            if cur != pre:
+                archives_intact = False
+                archive_errors.append(f"{arch}:modified")
+
+total_count = len(race_scenarios)
+pass_count = len(passed_scenarios)
+fail_count = len(failed_scenarios)
+skip_count = len(skipped_scenarios)
+
+all_ok = (pass_count == total_count) and (fail_count == 0) and (skip_count == 0) and archives_intact
+status = "PASS" if all_ok else "FAIL"
+
+summary = f"STATUS:{status}|passed={pass_count},failed={fail_count},skipped={skip_count},archives_intact={archives_intact}"
+if archive_errors:
+    summary += f",archive_errors=[{", ".join(archive_errors)}]"
+print(summary + "|" + "; ".join(details))
+' "$SCRIPT_FILE" 2>&1)
 
 if ! echo "$RACE_OUTPUT" | grep -q "^STATUS:PASS"; then
     TRAP_SAFETY_OK=0
