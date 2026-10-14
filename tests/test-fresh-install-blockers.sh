@@ -113,6 +113,19 @@ unregister_test_path() {
     fi
 }
 
+# Permitted canonical boundary roots
+CANONICAL_TMP="$(realpath -q "/tmp" 2>/dev/null || echo "/tmp")"
+CANONICAL_ROOT="$(realpath -q "$ROOT_DIR" 2>/dev/null || echo "$ROOT_DIR")"
+
+# Helper to verify if target resides strictly within boundary directory
+is_within_boundary() {
+    local target="$1"
+    local boundary="$2"
+    [ -n "$target" ] && [ -n "$boundary" ] || return 1
+    boundary="${boundary%/}"
+    [ "$target" != "$boundary" ] && [ "${target#$boundary/}" != "$target" ]
+}
+
 safe_delete_path() {
     local p="$1"
     if [ -z "$p" ]; then
@@ -122,8 +135,8 @@ safe_delete_path() {
     if [ "${CREATED_TEST_PATHS["$p"]:-0}" -ne 1 ]; then
         return 0
     fi
-    # Security Rule 2: Path must actually exist on filesystem
-    if [ ! -e "$p" ]; then
+    # Security Rule 2: Path must actually exist on filesystem (file, directory, or symlink)
+    if [ ! -e "$p" ] && [ ! -L "$p" ]; then
         unset "CREATED_TEST_PATHS[$p]"
         return 0
     fi
@@ -133,13 +146,34 @@ safe_delete_path() {
     if [ "$owner_uid" -ne "$(id -u)" ]; then
         return 0
     fi
-    # Security Rule 4: Must not be a critical system path or repo root
-    local abs_p
-    abs_p="$(readlink -f "$p" 2>/dev/null || echo "")"
-    if [ "$abs_p" = "/" ] || [ "$abs_p" = "/tmp" ] || [ "$abs_p" = "$HOME" ] || [ "$abs_p" = "$ROOT_DIR" ]; then
+    # Security Rule 4: Canonicalize target path (resolving all symlinks and .. segments)
+    local canonical_p
+    canonical_p="$(realpath -q "$p" 2>/dev/null || echo "")"
+    if [ -z "$canonical_p" ]; then
         return 0
     fi
+    # Security Rule 5: Reject system roots and critical paths
+    case "$canonical_p" in
+        "/"|"/tmp"|"/root"|"/home"|"/etc"|"/var"|"/usr"|"/bin"|"/sbin"|"/lib"|"/lib64"|"/opt"|"/boot"|"/sys"|"/proc"|"/dev"|"$HOME"|"$CANONICAL_ROOT")
+            return 0
+            ;;
+    esac
+    # Security Rule 6: Enforce permitted directory boundaries (/tmp or repository root)
+    if ! is_within_boundary "$canonical_p" "$CANONICAL_TMP" && ! is_within_boundary "$canonical_p" "$CANONICAL_ROOT"; then
+        return 0
+    fi
+    # Security Rule 7: Forbid deletion of repository source trees or git metadata inside repository root
+    if [ "$canonical_p" = "$CANONICAL_ROOT/.git" ] || is_within_boundary "$canonical_p" "$CANONICAL_ROOT/.git"; then
+        return 0
+    fi
+    for protected_repo_tree in "vm1" "vm2" "docs" "tests" "shared" "windows" "config"; do
+        local prot_path="$CANONICAL_ROOT/$protected_repo_tree"
+        if [ "$canonical_p" = "$prot_path" ] || is_within_boundary "$canonical_p" "$prot_path"; then
+            return 0
+        fi
+    done
 
+    # All safety predicates verified: safe to delete
     rm -rf "$p"
     unset "CREATED_TEST_PATHS[$p]"
 }
@@ -168,6 +202,23 @@ trap 'handle_signal INT' INT
 trap 'handle_signal TERM' TERM
 trap 'handle_signal HUP' HUP
 trap cleanup_suite_traps EXIT
+
+# Internal subtest handlers to exercise the actual traps and cleanup implementation directly
+if [ "${1:-}" = "--internal-test-cleanup-env" ]; then
+    LEGIT_TMP=$(mktemp -d "/tmp/pipejack-legit-cleanup-XXXXXX") || exit 1
+    register_test_path "$LEGIT_TMP"
+    echo "LEGIT_CREATED:$LEGIT_TMP"
+    exit 0
+fi
+
+if [ "${1:-}" = "--internal-test-cleanup-signal" ]; then
+    SIG_TMP=$(mktemp -d "/tmp/pipejack-sig-cleanup-XXXXXX") || exit 1
+    register_test_path "$SIG_TMP"
+    echo "SIG_TMP:$SIG_TMP"
+    kill -INT $$
+    echo "SHOULD_NOT_REACH_HERE"
+    exit 0
+fi
 
 # Create a unique test-owned canary file (using PID and nanosecond timestamp)
 UNIQUE_CANARY_TAG="pipejack_canary_${$}_$(date +%s%N)"
@@ -268,6 +319,7 @@ PRE_EXISTING_SAFETY_DIR=$(mktemp -d -p . tmp_pipejack_rel_preexisting_XXXXXX) ||
     echo "[-] Failed to create safety sentinel directory" >&2
     exit 1
 }
+register_test_path "$PRE_EXISTING_SAFETY_DIR"
 echo "PIPEJACK_PRE_EXISTING_SAFETY_SENTINEL" > "$PRE_EXISTING_SAFETY_DIR/safety.marker"
 
 # Absolute path with spaces
@@ -290,6 +342,7 @@ cleanup_test1() {
     safe_delete_path "$TEST_SPACES_OUT"
     safe_delete_path "$TEST_REL_OUT_RAW"
     safe_delete_path "$TEST_REL_OUT"
+    safe_delete_path "$PRE_EXISTING_SAFETY_DIR"
 }
 
 TEST1_OK=1
@@ -360,11 +413,6 @@ if [ ! -d "$PRE_EXISTING_SAFETY_DIR" ] || [ ! -f "$PRE_EXISTING_SAFETY_DIR/safet
 fi
 
 cleanup_test1
-
-# Explicitly remove pre-existing safety directory after proving it was not deleted by the test
-if [ -d "$PRE_EXISTING_SAFETY_DIR" ]; then
-    rm -rf "$PRE_EXISTING_SAFETY_DIR"
-fi
 
 if [ $TEST1_OK -eq 1 ]; then
     pass "Configured output directories (spaces and relative) generate and validate all 15 individual archives (non-empty, valid tar -tzf, zero substitutions) with zero host /tmp side-effects"
@@ -921,131 +969,101 @@ HOSTILE_SENTINEL_DIR=$(mktemp -d "/tmp/pipejack-hostile-sentinel-XXXXXX") || { e
 register_test_path "$HOSTILE_SENTINEL_DIR"
 echo "IMMUTABLE_SENTINEL_CONTENT_$$" > "$HOSTILE_SENTINEL_DIR/sentinel.data"
 
-# Subtest A: Execute a subshell with pre-populated variables pointing to HOSTILE_SENTINEL_DIR
-# Verifies that hostile/pre-populated environment variables cannot trick trap cleanup into deleting unrecorded paths
-SUB_OUTPUT=$(bash -c "
-    set -uo pipefail
-    SCRIPT_DIR=\"$SCRIPT_DIR\"
-    ROOT_DIR=\"$ROOT_DIR\"
-    # Hostile injection: caller exports paths pointing to unrelated directories
-    export TEST_SPACES_OUT=\"$HOSTILE_SENTINEL_DIR\"
-    export TEST_REL_OUT=\"$HOSTILE_SENTINEL_DIR\"
-    export VM1_TARGET_DIR=\"$HOSTILE_SENTINEL_DIR\"
-    export VM1_OUT_DIR=\"$HOSTILE_SENTINEL_DIR\"
-    export TMP_VM2_TEST_DIR=\"$HOSTILE_SENTINEL_DIR\"
-    export PRE_EXISTING_SAFETY_DIR=\"$HOSTILE_SENTINEL_DIR\"
+TRAP_SAFETY_OK=1
 
-    # Unset cleanup variables before trap registration
-    unset TEST_SPACES_OUT TEST_REL_OUT TEST_REL_OUT_RAW PRE_EXISTING_SAFETY_DIR
-    unset VM1_TARGET_DIR VM1_OUT_DIR VM1_BASHRC VM1_LOG
-    unset MOCK_SPACES_DIR DIR_SPACES MOCK_SSH_DIR TMP_VM2_TEST_DIR TMP_TEST_KEY_DIR
+# 1. Direct Boundary and Registration Tests of safe_delete_path
+# 1a: Unregistered path must NOT be deleted
+unregister_test_path "$HOSTILE_SENTINEL_DIR"
+safe_delete_path "$HOSTILE_SENTINEL_DIR"
+if [ ! -f "$HOSTILE_SENTINEL_DIR/sentinel.data" ]; then
+    TRAP_SAFETY_OK=0
+    echo "  [-] Security defect: safe_delete_path deleted an unregistered path!" >&2
+fi
+register_test_path "$HOSTILE_SENTINEL_DIR"
 
-    declare -A CREATED_TEST_PATHS=()
-    register_test_path() { local p=\"\$1\"; [ -n \"\$p\" ] && CREATED_TEST_PATHS[\"\$p\"]=1; }
-    safe_delete_path() {
-        local p=\"\$1\"
-        [ -n \"\$p\" ] || return 0
-        [ \"\${CREATED_TEST_PATHS[\"\$p\"]:-0}\" -eq 1 ] || return 0
-        [ -e \"\$p\" ] || return 0
-        local uid; uid=\$(stat -c '%u' \"\$p\" 2>/dev/null || echo -1)
-        [ \"\$uid\" -eq \"\$(id -u)\" ] || return 0
-        rm -rf \"\$p\"
-    }
-    cleanup_suite_traps() {
-        for p in \"\${!CREATED_TEST_PATHS[@]}\"; do
-            safe_delete_path \"\$p\"
-        done
-    }
-    trap cleanup_suite_traps EXIT
+# 1b: Out-of-bounds path must NOT be deleted (even if registered)
+OUTSIDE_TMP_DIR=$(mktemp -d -p /var/tmp pipejack-boundary-test-XXXXXX 2>/dev/null || echo "")
+if [ -n "$OUTSIDE_TMP_DIR" ]; then
+    register_test_path "$OUTSIDE_TMP_DIR"
+    safe_delete_path "$OUTSIDE_TMP_DIR"
+    if [ ! -d "$OUTSIDE_TMP_DIR" ]; then
+        TRAP_SAFETY_OK=0
+        echo "  [-] Security defect: safe_delete_path deleted a path outside permitted boundaries (/tmp, repo root)!" >&2
+    fi
+    rm -rf "$OUTSIDE_TMP_DIR"
+    unregister_test_path "$OUTSIDE_TMP_DIR"
+fi
 
-    # Create a legitimate test path that SHOULD be cleaned up
-    LEGIT_TMP=\$(mktemp -d \"/tmp/pipejack-legit-tmp-XXXXXX\")
-    register_test_path \"\$LEGIT_TMP\"
-    echo \"LEGIT_CREATED:\$LEGIT_TMP\"
-    exit 0
-" 2>&1)
+# 1c: Critical system root and repo root protection
+register_test_path "$ROOT_DIR"
+safe_delete_path "$ROOT_DIR"
+if [ ! -d "$ROOT_DIR" ]; then
+    TRAP_SAFETY_OK=0
+    echo "  [-] Critical defect: safe_delete_path attempted to delete repository root!" >&2
+fi
+unregister_test_path "$ROOT_DIR"
+
+register_test_path "$ROOT_DIR/vm1"
+safe_delete_path "$ROOT_DIR/vm1"
+if [ ! -d "$ROOT_DIR/vm1" ]; then
+    TRAP_SAFETY_OK=0
+    echo "  [-] Critical defect: safe_delete_path attempted to delete repository source tree!" >&2
+fi
+unregister_test_path "$ROOT_DIR/vm1"
+
+# 2. Subtest A: Testing actual script cleanup and trap setup with hostile environment variables
+# Invokes this very script with hostile pre-populated variables pointing to HOSTILE_SENTINEL_DIR
+SCRIPT_FILE="$(realpath "${BASH_SOURCE[0]}")"
+SUB_OUTPUT=$(TEST_SPACES_OUT="$HOSTILE_SENTINEL_DIR" \
+    TEST_REL_OUT="$HOSTILE_SENTINEL_DIR" \
+    VM1_TARGET_DIR="$HOSTILE_SENTINEL_DIR" \
+    VM1_OUT_DIR="$HOSTILE_SENTINEL_DIR" \
+    TMP_VM2_TEST_DIR="$HOSTILE_SENTINEL_DIR" \
+    PRE_EXISTING_SAFETY_DIR="$HOSTILE_SENTINEL_DIR" \
+    bash "$SCRIPT_FILE" --internal-test-cleanup-env 2>&1)
 
 LEGIT_PATH=$(echo "$SUB_OUTPUT" | grep "^LEGIT_CREATED:" | cut -d: -f2)
 
-TRAP_SAFETY_OK=1
-
-# 1. Verify hostile sentinel directory was NOT deleted
+# Verify hostile sentinel directory was NOT deleted and contents unchanged
 if [ ! -d "$HOSTILE_SENTINEL_DIR" ] || [ ! -f "$HOSTILE_SENTINEL_DIR/sentinel.data" ]; then
     TRAP_SAFETY_OK=0
-    echo "  [-] Hostile sentinel directory was deleted by trap cleanup!" >&2
+    echo "  [-] Hostile sentinel directory was deleted by script cleanup traps!" >&2
 elif [ "$(cat "$HOSTILE_SENTINEL_DIR/sentinel.data")" != "IMMUTABLE_SENTINEL_CONTENT_$$" ]; then
     TRAP_SAFETY_OK=0
-    echo "  [-] Hostile sentinel data was altered!" >&2
+    echo "  [-] Hostile sentinel data was altered during script execution!" >&2
 fi
 
-# 2. Verify legitimate test path WAS cleaned up
-if [ -n "$LEGIT_PATH" ] && [ -d "$LEGIT_PATH" ]; then
+# Verify legitimately created test path WAS cleaned up by the script's actual cleanup trap
+if [ -z "$LEGIT_PATH" ]; then
     TRAP_SAFETY_OK=0
-    echo "  [-] Legitimate test temporary directory was not cleaned up: $LEGIT_PATH" >&2
-    rm -rf "$LEGIT_PATH"
+    echo "  [-] Subtest A failed to report legitimate created temporary path" >&2
+elif [ -d "$LEGIT_PATH" ]; then
+    TRAP_SAFETY_OK=0
+    echo "  [-] Legitimate test temporary directory was not cleaned up by script EXIT trap: $LEGIT_PATH" >&2
+    safe_delete_path "$LEGIT_PATH" 2>/dev/null || rm -rf "$LEGIT_PATH"
 fi
 
-# Subtest B: Signal termination (SIGINT) terminates immediately and cleans only registered paths
-SIG_OUTPUT=$(python3 -c '
+# 3. Subtest B: Signal termination (SIGINT) invokes actual script trap, terminates immediately, and cleans registered paths
+SIG_OUTPUT=$(python3 -c "
 import subprocess, os
 
-test_script = """
-set -uo pipefail
-declare -A CREATED_TEST_PATHS=()
-register_test_path() { local p="$1"; [ -n "$p" ] && CREATED_TEST_PATHS["$p"]=1; }
-safe_delete_path() {
-    local p="$1"
-    [ -n "$p" ] || return 0
-    [ "${CREATED_TEST_PATHS["$p"]:-0}" -eq 1 ] || return 0
-    [ -e "$p" ] || return 0
-    rm -rf "$p"
-    unset "CREATED_TEST_PATHS[$p]"
-}
-cleanup_suite_traps() {
-    for p in "${!CREATED_TEST_PATHS[@]}"; do
-        safe_delete_path "$p"
-    done
-}
-handle_signal() {
-    local sig="$1"
-    trap - EXIT INT TERM HUP
-    cleanup_suite_traps
-    case "$sig" in
-        INT)  exit 130 ;;
-        TERM) exit 143 ;;
-        HUP)  exit 129 ;;
-        *)    exit 1 ;;
-    esac
-}
-trap "handle_signal INT" INT
-trap cleanup_suite_traps EXIT
-
-INT_TMP=$(mktemp -d "/tmp/pipejack-int-tmp-XXXXXX")
-register_test_path "$INT_TMP"
-echo "INT_TMP:$INT_TMP"
-
-# Send INT to the subshell itself ($$ is child PID)
-kill -INT $$
-echo "SHOULD_NOT_REACH_HERE"
-"""
-
-res = subprocess.run(["bash", "-c", test_script], capture_output=True, text=True)
-int_tmp = None
+res = subprocess.run(['bash', '$SCRIPT_FILE', '--internal-test-cleanup-signal'], capture_output=True, text=True)
+sig_tmp = None
 for line in res.stdout.splitlines():
-    if line.startswith("INT_TMP:"):
-        int_tmp = line.split(":", 1)[1]
+    if line.startswith('SIG_TMP:'):
+        sig_tmp = line.split(':', 1)[1]
 
-cleaned = "YES" if (int_tmp and not os.path.exists(int_tmp)) else "NO"
-unreached = "YES" if "SHOULD_NOT_REACH_HERE" not in res.stdout else "NO"
-print(f"RC:{res.returncode}|CLEANED:{cleaned}|UNREACHED:{unreached}|PATH:{int_tmp}")
-' 2>&1)
+cleaned = 'YES' if (sig_tmp and not os.path.exists(sig_tmp)) else 'NO'
+unreached = 'YES' if 'SHOULD_NOT_REACH_HERE' not in res.stdout else 'NO'
+print(f'RC:{res.returncode}|CLEANED:{cleaned}|UNREACHED:{unreached}|PATH:{sig_tmp}')
+" 2>&1)
 
 if ! echo "$SIG_OUTPUT" | grep -q "RC:130" || ! echo "$SIG_OUTPUT" | grep -q "CLEANED:YES" || ! echo "$SIG_OUTPUT" | grep -q "UNREACHED:YES"; then
     TRAP_SAFETY_OK=0
     echo "  [-] Signal termination safety test failed: $SIG_OUTPUT" >&2
 fi
 
-# Clean up sentinel directory safely
+# Clean up sentinel directory safely via safe_delete_path
 safe_delete_path "$HOSTILE_SENTINEL_DIR"
 
 if [ $TRAP_SAFETY_OK -eq 1 ]; then
