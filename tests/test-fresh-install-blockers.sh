@@ -1440,6 +1440,7 @@ httpd = QuietHTTPServer(('127.0.0.1', 0), QuietRequestHandler)
 port = httpd.server_address[1]
 t = threading.Thread(target=httpd.serve_forever, daemon=True)
 t.start()
+time.sleep(0.2)
 
 try:
     # 1. Verify unauthenticated access to REST endpoint with CORS *
@@ -1519,7 +1520,7 @@ try:
 finally:
     httpd.shutdown()
     httpd.server_close()
-" 2>&1)
+" 2>&1 || true)
 
 if echo "$BEHAVIORAL_CONSOLE_RESULT" | grep -q "BEHAVIORAL_CONSOLE_VERIFIED"; then
     pass "Demo Console server behavioral tests verified: REST unauth 200, valid origin 101, missing origin 101, CSWSH 403, subnet override 403"
