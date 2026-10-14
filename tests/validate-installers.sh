@@ -68,10 +68,33 @@ fi
 echo
 echo "[+] 4/5 Validating Windows PowerShell Scripts..."
 PS_FAILURES=0
-for ps_file in "$ROOT_DIR"/windows/*.ps1; do
-    if [ -f "$ps_file" ]; then
-        # Check for param block and matching braces
-        python3 -c "
+if command -v pwsh >/dev/null 2>&1; then
+    echo "  [INFO] pwsh detected. Running AST parser verification..."
+    for ps_file in "$ROOT_DIR"/windows/*.ps1; do
+        if [ -f "$ps_file" ]; then
+            if pwsh -NoProfile -Command "
+                \$tokens = \$null
+                \$errors = \$null
+                \$ast = [System.Management.Automation.Language.Parser]::ParseFile('$ps_file', [ref]\$tokens, [ref]\$errors)
+                if (\$errors.Count -gt 0) {
+                    Write-Error \"Syntax errors in $ps_file: \$((\$errors | ForEach-Object { \$_.Message }) -join '; ')\"
+                    exit 1
+                }
+            "; then
+                echo "  [OK] $(basename "$ps_file") passed AST syntax validation."
+            else
+                echo "  [-] $(basename "$ps_file") failed AST syntax validation!"
+                PS_FAILURES=$((PS_FAILURES + 1))
+            fi
+        fi
+    done
+else
+    echo "  [NOT RUN / UNVERIFIED] Full PowerShell AST syntax parsing requires Windows or pwsh runtime."
+    echo "                         (pwsh is not installed in this Linux environment; AST analysis skipped)"
+    echo "                         Performing basic static file audit (param block & balanced braces)..."
+    for ps_file in "$ROOT_DIR"/windows/*.ps1; do
+        if [ -f "$ps_file" ]; then
+            if python3 -c "
 import sys
 with open('$ps_file', 'r', encoding='utf-8') as f:
     content = f.read()
@@ -83,13 +106,15 @@ close_curly = content.count('}')
 if open_curly != close_curly:
     print(f'Mismatched braces in $ps_file: {open_curly} open vs {close_curly} close')
     sys.exit(1)
-" || {
-            echo "  [-] PowerShell structure validation failed on: $ps_file"
-            PS_FAILURES=$((PS_FAILURES + 1))
-        }
-        echo "  [OK] $(basename "$ps_file") passed structure audit."
-    fi
-done
+"; then
+                echo "  [OK] $(basename "$ps_file") passed basic static structure check (unverified in pwsh)."
+            else
+                echo "  [-] $(basename "$ps_file") failed basic static structure check!"
+                PS_FAILURES=$((PS_FAILURES + 1))
+            fi
+        fi
+    done
+fi
 
 if [ $PS_FAILURES -gt 0 ]; then
     FAILURES=$((FAILURES + PS_FAILURES))
@@ -139,7 +164,10 @@ fi
 echo
 echo "============================================================"
 if [ $FAILURES -eq 0 ]; then
-    echo " [PASSED] All installer CLI flags, dry-runs, and syntax tests PASSED."
+    echo " [PASSED] Shell syntax, CLI options, dry-runs, and YAML policies PASSED."
+    if ! command -v pwsh >/dev/null 2>&1; then
+        echo "          (PowerShell AST syntax validation skipped: pwsh not installed on Linux host)"
+    fi
     echo "============================================================"
     exit 0
 else

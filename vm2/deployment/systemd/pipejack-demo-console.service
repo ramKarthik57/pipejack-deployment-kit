@@ -1,0 +1,22 @@
+[Unit]
+Description=PipeJack Demo Console Web Application
+Documentation=https://github.com/ramKarthik57/pipejack-platform
+After=network.target pipejack-ci.service
+Wants=pipejack-ci.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/pipejack-demo-console
+ExecStart=/usr/bin/python3 -u /home/ubuntu/pipejack-demo-console/server.py
+Restart=on-failure
+RestartSec=3
+StandardOutput=append:/home/ubuntu/pipejack-demo-console/console.log
+StandardError=append:/home/ubuntu/pipejack-demo-console/console.log
+
+# Resource and environment limits
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

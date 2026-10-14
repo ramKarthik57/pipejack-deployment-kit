@@ -48,6 +48,7 @@ REQUIRED_FILES=(
     "vm2/deployment/docker/Dockerfile.app"
     "vm2/deployment/policies/policy-banking.yaml"
     "vm2/deployment/systemd/pipejack-ci.service"
+    "vm2/deployment/systemd/pipejack-demo-console.service"
     "vm2/demo/demo-console/server.py"
     "vm2/demo/demo-console/prepare-demo.sh"
     "vm2/scripts/health-check.sh"

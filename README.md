@@ -67,7 +67,13 @@ Based on live benchmark measurements:
 | **RAM** | 4 GB | 8 GB (Docker daemon + JVM build containers) | 16 GB+ total host RAM |
 | **Storage** | 20 GB free | 40 GB free (Docker container image layers) | 10 GB free |
 | **Operating System**| Ubuntu 24.04 LTS or 22.04 LTS (x86_64)| Ubuntu 24.04 LTS or 22.04 LTS (x86_64)| Windows 10/11 with OpenSSH Client |
+| **Toolchain** | Client tools (git, curl, jq, nodejs, python3) | Go >= 1.23 required (Go 1.25.0 tested) + Docker | OpenSSH Client, PowerShell 5.1/7.x |
 | **Virtualization** | VMware Workstation Pro / Player or Fusion | VMware Workstation Pro / Player or Fusion | Hardware virtualization (VT-x / AMD-V) enabled |
+
+> [!NOTE]
+> - **Go Toolchain:** Compiling the custom CI orchestrator (`pipejack-ci`) requires Go 1.23+. The reference machine runs **Go 1.25.0** (`go version go1.25.0 linux/amd64`). `vm2/install.sh` automatically fetches and installs Go 1.25.0 if Go is missing or < 1.23.
+> - **Archive Generation:** While VM1 is provisioned as a lightweight client (Docker/Java/Maven are omitted from the default install), generating all 15 workload and attack tarballs from scratch using `build-all-tarballs.sh` requires `default-jdk` (Java 17+), `maven`, and `npm` on the machine executing the builder.
+> - **Verification Status:** Components have been audited and verified on the reference lab nodes. End-to-end automated installation has not yet been executed on clean virtual machines from bare ISOs. See [`docs/FRESH_INSTALL.md`](docs/FRESH_INSTALL.md) for the fresh installation guide and acceptance checklist.
 
 ---
 
@@ -139,15 +145,25 @@ cd pipejack-deployment-kit\windows
 # 2. Run Preflight Checks (Validates SSH, IPs, and disk space)
 .\preflight.ps1 -VM1_IP 192.168.88.132 -VM2_IP 192.168.88.133
 
-# 3. Optional Dry-Run (Check mode without modifying VMs)
+# 3. Optional Dry-Run (Read-only preview; no files transferred, no system changes)
 .\setup-pipejack.ps1 -VM1_IP 192.168.88.132 -VM2_IP 192.168.88.133 -DryRun
 
 # 4. Execute Full Two-VM Installation
 .\setup-pipejack.ps1 -VM1_IP 192.168.88.132 -VM2_IP 192.168.88.133
 
-# 5. Run Verification
+# 5. Run Verification (Strictly validates endpoints and attestation ledger)
 .\verify-pipejack.ps1 -VM1_IP 192.168.88.132 -VM2_IP 192.168.88.133
 ```
+
+> [!TIP]
+> **Understanding `-DryRun`:**
+> When `-DryRun` is passed, `setup-pipejack.ps1` runs in strictly non-modifying preview mode:
+> - Performs read-only network and SSH preflight connectivity checks.
+> - **Does not** transfer packages or files via SCP.
+> - **Does not** create or remove remote staging directories.
+> - **Does not** execute remote bash installer scripts.
+> - **Does not** modify system state, start Docker containers, or restart systemd services.
+> - Prints an itemized preview of all deployment actions that would occur during a live run.
 
 ---
 

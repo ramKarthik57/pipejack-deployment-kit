@@ -7,6 +7,16 @@
     Automates the transfer, installation, and end-to-end verification of the
     PipeJack two-node Zero-Trust CI/CD pipeline on Ubuntu VMware virtual machines.
 
+    DRY-RUN BEHAVIOR:
+    When -DryRun is specified, the script operates strictly in read-only audit mode:
+    - Preflight checks (connectivity and SSH reachability) are performed read-only.
+    - No remote directories are created or modified.
+    - No package transfers (SCP) are initiated.
+    - No remote installation scripts or system modifications are executed.
+    - No services are restarted or changed.
+    - A detailed execution preview is displayed showing all actions that would be
+      taken during a live deployment.
+
 .PARAMETER VM1_IP
     IP address of VM1 (Developer / Workload Client). Default: 192.168.88.132
 
@@ -26,7 +36,8 @@
     Path to root of deployment kit. Default: parent of script directory.
 
 .PARAMETER DryRun
-    Runs installers in preflight/dry-run mode without modifying VM state.
+    Runs in preview/dry-run mode without modifying VM state, creating files,
+    transferring archives, or executing installation commands.
 
 .PARAMETER SkipVM1
     Skip installation on VM1.
@@ -69,14 +80,14 @@ Write-Host "============================================================" -Foreg
 
 # 1. Path Resolution
 if (-not $KitDir) {
-    $KitDir = Resolve-Path (Join-Path $PSScriptRoot "..")
+    $KitDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 }
 Write-Host "[+] Local Kit Root: $KitDir"
 Write-Host "    Target VM1 (Client):       $SSHUser@$VM1_IP"
 Write-Host "    Target VM2 (Orchestrator): $SSHUser@$VM2_IP"
-Write-Host "    Mode:                      $($DryRun ? 'DRY-RUN / AUDIT' : 'LIVE DEPLOYMENT')"
+Write-Host "    Mode:                      $($DryRun ? 'DRY-RUN / PREVIEW (NON-MODIFYING)' : 'LIVE DEPLOYMENT')"
 
-# 2. Preflight Check
+# 2. Preflight Check (Read-only connectivity and environment inspection)
 if (-not $SkipPreflight) {
     Write-Host "`n[+] Executing Preflight Checks..."
     $PreflightScript = Join-Path $PSScriptRoot "preflight.ps1"
@@ -96,8 +107,51 @@ if (-not $SkipPreflight) {
     }
 }
 
-# 3. User Confirmation
-if (-not $Force -and -not $DryRun) {
+# 3. Dry-Run Preview Mode
+if ($DryRun) {
+    Write-Host "`n============================================================" -ForegroundColor Yellow
+    Write-Host " DRY-RUN PREVIEW: NO REMOTE MODIFICATIONS PERFORMED" -ForegroundColor Yellow
+    Write-Host "============================================================" -ForegroundColor Yellow
+    Write-Host " The following operations would be performed in a live deployment:`n"
+
+    if (-not $SkipVM2) {
+        Write-Host " [Phase 1: VM2 Security Orchestrator ($VM2_IP)]" -ForegroundColor Cyan
+        Write-Host "   * Staging:  Create isolated directory /tmp/pipejack-deploy-<timestamp>-<pid>-vm2"
+        Write-Host "   * Transfer: SCP '$KitDir\vm2' -> '$SSHUser@${VM2_IP}:/tmp/pipejack-deploy-...-vm2/'"
+        Write-Host "   * Execute:  bash /tmp/pipejack-deploy-...-vm2/install.sh"
+        Write-Host "   * Tasks:    Install Go toolchain (1.23+), build pipejack-ci binary, initialize Ed25519"
+        Write-Host "               signing key, install pipejack-ci.service and pipejack-demo-console.service,"
+        Write-Host "               start registry:2 Docker container (:5000), enable systemd units."
+        Write-Host "   * Cleanup:  Remove temporary staging directory created by this deployment."
+    }
+
+    if (-not $SkipVM1) {
+        Write-Host "`n [Phase 2: VM1 Workload Client ($VM1_IP)]" -ForegroundColor Cyan
+        Write-Host "   * Staging:  Create isolated directory /tmp/pipejack-deploy-<timestamp>-<pid>-vm1"
+        Write-Host "   * Transfer: SCP '$KitDir\vm1' -> '$SSHUser@${VM1_IP}:/tmp/pipejack-deploy-...-vm1/'"
+        Write-Host "   * Execute:  bash /tmp/pipejack-deploy-...-vm1/install.sh --ci-endpoint http://${VM2_IP}:8888/upload"
+        Write-Host "   * Tasks:    Install client tools (git, curl, jq, nodejs, python3), deploy applications,"
+        Write-Host "               attacks suite, security fixtures, and configure pipejack-upload.sh."
+        Write-Host "   * Cleanup:  Remove temporary staging directory created by this deployment."
+    }
+
+    if (-not $SkipVerify) {
+        Write-Host "`n [Phase 3: Post-Deployment Verification]" -ForegroundColor Cyan
+        Write-Host "   * Probe CI endpoint:       http://${VM2_IP}:8888/health (expect status: 'ok')"
+        Write-Host "   * Probe Demo Console:      http://${VM2_IP}:8090/api/status (expect ci_healthy: true)"
+        Write-Host "   * Probe Docker Registry:   http://${VM2_IP}:5000/v2/ (expect HTTP 200)"
+        Write-Host "   * End-to-end Upload Test:  Execute sample workload upload from VM1 and verify"
+        Write-Host "                              cryptographically signed attestation record in VM2 ledger."
+    }
+
+    Write-Host "`n============================================================" -ForegroundColor Green
+    Write-Host " DRY-RUN PREVIEW COMPLETED: System state is completely unchanged." -ForegroundColor Green
+    Write-Host "============================================================" -ForegroundColor Green
+    exit 0
+}
+
+# 4. User Confirmation for Live Deployment
+if (-not $Force) {
     Write-Host "`n[?] Proceed with transferring packages and executing installation on both VMs? [Y/N]: " -NoNewline -ForegroundColor Yellow
     $ans = Read-Host
     if ($ans -notmatch "^[Yy]$") {
@@ -106,7 +160,7 @@ if (-not $Force -and -not $DryRun) {
     }
 }
 
-# SSH & SCP Argument Builders
+# SSH & SCP Execution Helpers using Argument Arrays
 $SSHKeyArgs = @()
 if ($SSHKey -and (Test-Path $SSHKey)) {
     $SSHKeyArgs = @("-i", $SSHKey)
@@ -121,23 +175,17 @@ function Invoke-RemoteCommand {
     Write-Host "`n[+] $Description on $IP..." -ForegroundColor Cyan
     $Target = "$SSHUser@$IP"
     $CommonArgs = @(
-        "-p", $SSHPort,
+        "-p", [string]$SSHPort,
         "-o", "BatchMode=yes",
         "-o", "ConnectTimeout=10",
         "-o", "StrictHostKeyChecking=accept-new"
     ) + $SSHKeyArgs + @($Target, $Command)
 
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = "ssh.exe"
-    $psi.Arguments = $CommonArgs -join " "
-    $psi.UseShellExecute = $false
-    
-    $proc = [System.Diagnostics.Process]::Start($psi)
-    $proc.WaitForExit()
-
-    if ($proc.ExitCode -ne 0) {
-        Write-Host "[-] Command failed on $IP (Exit Code: $($proc.ExitCode))" -ForegroundColor Red
-        throw "Remote command execution error on $IP"
+    & "ssh.exe" @CommonArgs
+    $code = $LASTEXITCODE
+    if ($code -ne 0) {
+        Write-Host "[-] Command failed on $IP (Exit Code: $code)" -ForegroundColor Red
+        throw "Remote command execution failed on $IP with exit code $code"
     }
     Write-Host "  [OK] $Description succeeded." -ForegroundColor Green
 }
@@ -149,87 +197,111 @@ function Send-RemotePackage {
         [string]$RemoteTargetDir
     )
     Write-Host "`n[+] Transferring $(Split-Path $LocalSourceDir -Leaf) -> $SSHUser@${IP}:${RemoteTargetDir}..."
-    
-    # Ensure remote directory exists and is clean
-    $InitCmd = "mkdir -p $RemoteTargetDir && rm -rf $RemoteTargetDir/*"
-    Invoke-RemoteCommand -IP $IP -Command $InitCmd -Description "Preparing remote staging directory"
+
+    # Create the isolated, uniquely owned staging directory
+    $InitCmd = "mkdir -m 0700 -p '$RemoteTargetDir'"
+    Invoke-RemoteCommand -IP $IP -Command $InitCmd -Description "Creating isolated staging directory"
 
     $Target = "$SSHUser@${IP}:${RemoteTargetDir}/"
     $ScpArgs = @(
-        "-P", $SSHPort,
+        "-P", [string]$SSHPort,
         "-r",
         "-o", "BatchMode=yes",
         "-o", "StrictHostKeyChecking=accept-new"
-    ) + $SSHKeyArgs + @("$LocalSourceDir\*", $Target)
+    ) + $SSHKeyArgs + @($LocalSourceDir, $Target)
 
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = "scp.exe"
-    $psi.Arguments = $ScpArgs -join " "
-    $psi.UseShellExecute = $false
-
-    $proc = [System.Diagnostics.Process]::Start($psi)
-    $proc.WaitForExit()
-
-    if ($proc.ExitCode -ne 0) {
-        Write-Host "[-] SCP Transfer failed for $IP (Exit Code: $($proc.ExitCode))" -ForegroundColor Red
-        throw "SCP transfer error to $IP"
+    & "scp.exe" @ScpArgs
+    $code = $LASTEXITCODE
+    if ($code -ne 0) {
+        Write-Host "[-] SCP Transfer failed for $IP (Exit Code: $code)" -ForegroundColor Red
+        throw "SCP transfer error to $IP with exit code $code"
     }
     Write-Host "  [OK] Transfer completed." -ForegroundColor Green
 }
 
-# 4. Deploy VM2 (Server Orchestrator first)
-if (-not $SkipVM2) {
-    Write-Host "`n============================================================" -ForegroundColor Cyan
-    Write-Host " PHASE 1: DEPLOYING VM2 (ORCHESTRATOR & CI SERVER)" -ForegroundColor Cyan
-    Write-Host "============================================================" -ForegroundColor Cyan
-
-    $VM2_Local = Join-Path $KitDir "vm2"
-    Send-RemotePackage -IP $VM2_IP -LocalSourceDir $VM2_Local -RemoteTargetDir "/tmp/pipejack-vm2"
-
-    $InstallArgs = ""
-    if ($DryRun) { $InstallArgs = "--dry-run" }
-
-    $VM2_Cmd = "chmod +x /tmp/pipejack-vm2/install.sh && bash /tmp/pipejack-vm2/install.sh $InstallArgs"
-    Invoke-RemoteCommand -IP $VM2_IP -Command $VM2_Cmd -Description "Executing VM2 Installer"
-}
-
-# 5. Deploy VM1 (Client / Developer Node)
-if (-not $SkipVM1) {
-    Write-Host "`n============================================================" -ForegroundColor Cyan
-    Write-Host " PHASE 2: DEPLOYING VM1 (WORKLOAD CLIENT & ATTACKS)" -ForegroundColor Cyan
-    Write-Host "============================================================" -ForegroundColor Cyan
-
-    $VM1_Local = Join-Path $KitDir "vm1"
-    Send-RemotePackage -IP $VM1_IP -LocalSourceDir $VM1_Local -RemoteTargetDir "/tmp/pipejack-vm1"
-
-    $InstallArgs = "--ci-endpoint http://${VM2_IP}:8888/upload"
-    if ($DryRun) { $InstallArgs += " --dry-run" }
-
-    $VM1_Cmd = "chmod +x /tmp/pipejack-vm1/install.sh && bash /tmp/pipejack-vm1/install.sh $InstallArgs"
-    Invoke-RemoteCommand -IP $VM1_IP -Command $VM1_Cmd -Description "Executing VM1 Installer"
-}
-
-# 6. Post-Deployment Verification
-if (-not $SkipVerify -and -not $DryRun) {
-    Write-Host "`n============================================================" -ForegroundColor Cyan
-    Write-Host " PHASE 3: END-TO-END VERIFICATION" -ForegroundColor Cyan
-    Write-Host "============================================================" -ForegroundColor Cyan
-
-    $VerifyScript = Join-Path $PSScriptRoot "verify-pipejack.ps1"
-    $vParams = @{
-        VM1_IP  = $VM1_IP
-        VM2_IP  = $VM2_IP
-        SSHUser = $SSHUser
+function Remove-RemoteStaging {
+    param(
+        [string]$IP,
+        [string]$RemoteStagingDir
+    )
+    # Safely verify path matches pattern and belongs to current user before removal
+    $SafeCleanCmd = "if [ -d '$RemoteStagingDir' ] && echo '$RemoteStagingDir' | grep -q '^/tmp/pipejack-deploy-' && [ `$(id -u) -eq `$(stat -c '%u' '$RemoteStagingDir' 2>/dev/null || echo -1) ]; then rm -rf '$RemoteStagingDir'; fi"
+    try {
+        Invoke-RemoteCommand -IP $IP -Command $SafeCleanCmd -Description "Cleaning isolated staging directory"
+    } catch {
+        Write-Host "  [!] Staging cleanup notice: $($_.Exception.Message)" -ForegroundColor Yellow
     }
-    if ($SSHKey) { $vParams["SSHKey"] = $SSHKey }
-
-    & $VerifyScript @vParams
 }
 
-Write-Host "`n============================================================" -ForegroundColor Cyan
-Write-Host " PIPEJACK TWO-VM DEPLOYMENT ORCHESTRATION COMPLETED" -ForegroundColor Green
-Write-Host " Web Demo Console:   http://${VM2_IP}:8090" -ForegroundColor Cyan
-Write-Host " CI Upload Endpoint: http://${VM2_IP}:8888/upload" -ForegroundColor Cyan
-Write-Host " Local Registry:     http://${VM2_IP}:5000" -ForegroundColor Cyan
-Write-Host "============================================================" -ForegroundColor Cyan
-exit 0
+# Unique Deployment Staging Identifiers
+$DeployTimestamp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+$VM2_Staging = "/tmp/pipejack-deploy-$DeployTimestamp-$PID-vm2"
+$VM1_Staging = "/tmp/pipejack-deploy-$DeployTimestamp-$PID-vm1"
+
+try {
+    # 5. Deploy VM2 (Server Orchestrator first)
+    if (-not $SkipVM2) {
+        Write-Host "`n============================================================" -ForegroundColor Cyan
+        Write-Host " PHASE 1: DEPLOYING VM2 (ORCHESTRATOR & CI SERVER)" -ForegroundColor Cyan
+        Write-Host "============================================================" -ForegroundColor Cyan
+
+        $VM2_Local = Join-Path $KitDir "vm2"
+        Send-RemotePackage -IP $VM2_IP -LocalSourceDir $VM2_Local -RemoteTargetDir $VM2_Staging
+
+        $VM2_Cmd = "chmod +x '$VM2_Staging/vm2/install.sh' && bash '$VM2_Staging/vm2/install.sh'"
+        Invoke-RemoteCommand -IP $VM2_IP -Command $VM2_Cmd -Description "Executing VM2 Installer"
+
+        # Clean staging directory owned by this deployment attempt
+        Remove-RemoteStaging -IP $VM2_IP -RemoteStagingDir $VM2_Staging
+    }
+
+    # 6. Deploy VM1 (Client / Developer Node)
+    if (-not $SkipVM1) {
+        Write-Host "`n============================================================" -ForegroundColor Cyan
+        Write-Host " PHASE 2: DEPLOYING VM1 (WORKLOAD CLIENT & ATTACKS)" -ForegroundColor Cyan
+        Write-Host "============================================================" -ForegroundColor Cyan
+
+        $VM1_Local = Join-Path $KitDir "vm1"
+        Send-RemotePackage -IP $VM1_IP -LocalSourceDir $VM1_Local -RemoteTargetDir $VM1_Staging
+
+        $VM1_Cmd = "chmod +x '$VM1_Staging/vm1/install.sh' && bash '$VM1_Staging/vm1/install.sh' --ci-endpoint 'http://${VM2_IP}:8888/upload'"
+        Invoke-RemoteCommand -IP $VM1_IP -Command $VM1_Cmd -Description "Executing VM1 Installer"
+
+        # Clean staging directory owned by this deployment attempt
+        Remove-RemoteStaging -IP $VM1_IP -RemoteStagingDir $VM1_Staging
+    }
+
+    # 7. Post-Deployment Verification
+    if (-not $SkipVerify) {
+        Write-Host "`n============================================================" -ForegroundColor Cyan
+        Write-Host " PHASE 3: END-TO-END VERIFICATION" -ForegroundColor Cyan
+        Write-Host "============================================================" -ForegroundColor Cyan
+
+        $VerifyScript = Join-Path $PSScriptRoot "verify-pipejack.ps1"
+        $vParams = @{
+            VM1_IP  = $VM1_IP
+            VM2_IP  = $VM2_IP
+            SSHUser = $SSHUser
+        }
+        if ($SSHKey) { $vParams["SSHKey"] = $SSHKey }
+
+        & $VerifyScript @vParams
+        if ($LASTEXITCODE -ne 0) {
+            throw "Post-deployment verification reported failure."
+        }
+    }
+
+    Write-Host "`n============================================================" -ForegroundColor Cyan
+    Write-Host " PIPEJACK TWO-VM DEPLOYMENT ORCHESTRATION COMPLETED" -ForegroundColor Green
+    Write-Host " Web Demo Console:   http://${VM2_IP}:8090" -ForegroundColor Cyan
+    Write-Host " CI Upload Endpoint: http://${VM2_IP}:8888/upload" -ForegroundColor Cyan
+    Write-Host " Local Registry:     http://${VM2_IP}:5000" -ForegroundColor Cyan
+    Write-Host "============================================================" -ForegroundColor Cyan
+    exit 0
+
+} catch {
+    Write-Host "`n[-] DEPLOYMENT FAILED: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "============================================================" -ForegroundColor Red
+    exit 1
+}
+

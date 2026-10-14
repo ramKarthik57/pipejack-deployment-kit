@@ -57,7 +57,7 @@ If using a specific private key:
 - `-VM2_IP`: IPv4 of VM2 (default: `192.168.88.133`)
 - `-SSHUser`: Username on VMs (default: `ubuntu`)
 - `-SSHKey`: Optional path to private SSH key
-- `-DryRun`: Executes installers in safe preflight audit mode
+- `-DryRun`: Executes in safe, non-modifying preview mode. Performs read-only preflight connectivity checks, does not transfer files, does not create or delete remote directories, does not execute installation scripts, and does not alter running services. Prints a full execution plan of what live deployment would execute.
 - `-SkipVM1`: Skip VM1 client deployment
 - `-SkipVM2`: Skip VM2 server deployment
 - `-Force`: Bypasses the interactive confirmation prompt

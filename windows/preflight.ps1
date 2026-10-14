@@ -109,38 +109,27 @@ function Test-RemoteHost {
     )
     Write-Host "`n[+] Verifying SSH Access and Environment on $NodeName ($IP)..."
     $Target = "$SSHUser@$IP"
+    $Cmd = "uname -s -m && cat /etc/os-release | grep PRETTY_NAME && df -h / | tail -1"
     $CommonArgs = @(
-        "-p", $SSHPort,
+        "-p", [string]$SSHPort,
         "-o", "BatchMode=yes",
         "-o", "ConnectTimeout=5",
         "-o", "StrictHostKeyChecking=accept-new"
-    ) + $SSHKeyArgs + @($Target)
+    ) + $SSHKeyArgs + @($Target, $Cmd)
 
-    # Test basic login and OS
-    $Cmd = "uname -s -m && cat /etc/os-release | grep PRETTY_NAME && df -h / | tail -1"
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = "ssh.exe"
-    $psi.Arguments = ($CommonArgs + @($Cmd)) -join " "
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $psi.UseShellExecute = $false
-    
-    $proc = [System.Diagnostics.Process]::Start($psi)
-    $proc.WaitForExit(8000)
-    $stdout = $proc.StandardOutput.ReadToEnd()
-    $stderr = $proc.StandardError.ReadToEnd()
+    $output = & "ssh.exe" @CommonArgs 2>&1
+    $exitCode = $LASTEXITCODE
 
-    if ($proc.ExitCode -eq 0) {
+    if ($exitCode -eq 0) {
         Write-Host "  [OK] SSH authentication succeeded for $Target" -ForegroundColor Green
-        $lines = $stdout.Trim() -split "`n"
-        foreach ($l in $lines) {
+        foreach ($l in $output) {
             Write-Host "       $l" -ForegroundColor Gray
         }
         return $true
     } else {
-        Write-Host "  [-] SSH authentication failed for $Target (Exit code: $($proc.ExitCode))" -ForegroundColor Red
-        if ($stderr) {
-            Write-Host "       $stderr" -ForegroundColor Red
+        Write-Host "  [-] SSH authentication failed for $Target (Exit code: $exitCode)" -ForegroundColor Red
+        foreach ($l in $output) {
+            Write-Host "       $l" -ForegroundColor Red
         }
         return $false
     }

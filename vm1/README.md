@@ -47,11 +47,15 @@ vm1/
 │   └── vuln-app/             # Vulnerability testbed fixture
 ├── scripts/
 │   ├── pipejack-upload.sh    # ANSI streaming multipart uploader
-│   └── build-all-tarballs.sh # Dynamic tarball generator for all fixtures
+│   └── build-all-tarballs.sh # Tarball generator for all 15 workload/attack fixtures
 └── config/
     ├── vm1.env.example       # Example environment variables
     └── bashrc.snippet        # Aliases and shell exports
 ```
+
+> [!NOTE]
+> **Archive Generation Dependencies:** While VM1 is configured as a lightweight developer client that can host and upload prebuilt archives, regenerating all 15 workload and attack tarballs from scratch using `build-all-tarballs.sh` requires `default-jdk` (Java 17+), `maven`, and `npm` on the machine running the builder. Individual bash/python fixtures do not require Java.
+
 
 ---
 

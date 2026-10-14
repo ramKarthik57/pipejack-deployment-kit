@@ -17,10 +17,18 @@ FAILURES=0
 
 # 1. CI Orchestrator Check (:8888)
 echo
-echo "[+] 1/3 Checking PipeJack CI Server (port $CI_PORT)..."
-if curl -s -f -m 3 "http://127.0.0.1:${CI_PORT}/health" > /tmp/ci_health.json 2>/dev/null; then
-    echo "  [OK] CI Server is HEALTHY"
-    echo "       Response: $(cat /tmp/ci_health.json)"
+echo "[+] 1/4 Checking PipeJack CI Server (port $CI_PORT)..."
+CI_RESP=""
+if CI_RESP=$(curl -s -f -m 3 "http://127.0.0.1:${CI_PORT}/health" 2>/dev/null); then
+    CI_STATUS=$(echo "$CI_RESP" | jq -r '.status // empty' 2>/dev/null || true)
+    CI_SERVICE=$(echo "$CI_RESP" | jq -r '.service // empty' 2>/dev/null || true)
+    if [ "$CI_STATUS" = "ok" ] && [ "$CI_SERVICE" = "pipejack-ci" ]; then
+        echo "  [OK] CI Server is HEALTHY (service: $CI_SERVICE, status: $CI_STATUS)"
+        echo "       Response: $CI_RESP"
+    else
+        echo "  [FAIL] CI Server returned invalid JSON payload: $CI_RESP"
+        FAILURES=$((FAILURES + 1))
+    fi
 else
     echo "  [FAIL] CI Server unreachable or returned non-200 on http://127.0.0.1:${CI_PORT}/health"
     FAILURES=$((FAILURES + 1))
@@ -28,13 +36,21 @@ fi
 
 # 2. Demo Console Check (:8090)
 echo
-echo "[+] 2/3 Checking PipeJack Demo Console (port $CONSOLE_PORT)..."
-if curl -s -f -m 3 "http://127.0.0.1:${CONSOLE_PORT}/api/status" > /tmp/console_status.json 2>/dev/null; then
-    echo "  [OK] Demo Console is HEALTHY"
-    CI_HEALTHY=$(jq -r '.ci_healthy' /tmp/console_status.json 2>/dev/null || echo "unknown")
-    ATTEST_COUNT=$(jq -r '.attestation_count' /tmp/console_status.json 2>/dev/null || echo "0")
-    echo "       CI Healthy in Console: $CI_HEALTHY"
-    echo "       Attestation Records:   $ATTEST_COUNT"
+echo "[+] 2/4 Checking PipeJack Demo Console (port $CONSOLE_PORT)..."
+CONSOLE_RESP=""
+if CONSOLE_RESP=$(curl -s -f -m 3 "http://127.0.0.1:${CONSOLE_PORT}/api/status" 2>/dev/null); then
+    CI_HEALTHY=$(echo "$CONSOLE_RESP" | jq -r '.ci_healthy // empty' 2>/dev/null || true)
+    ATTEST_COUNT=$(echo "$CONSOLE_RESP" | jq -r '.attestation_count // 0' 2>/dev/null || true)
+    ENFORCEMENT=$(echo "$CONSOLE_RESP" | jq -r '.enforcement_mode // "unknown"' 2>/dev/null || true)
+
+    if [ "$CI_HEALTHY" = "true" ]; then
+        echo "  [OK] Demo Console is HEALTHY and connected to CI"
+        echo "       Attestation Records: $ATTEST_COUNT"
+        echo "       Enforcement Mode:    $ENFORCEMENT"
+    else
+        echo "  [FAIL] Demo Console reported ci_healthy != true: $CONSOLE_RESP"
+        FAILURES=$((FAILURES + 1))
+    fi
 else
     echo "  [FAIL] Demo Console unreachable or returned non-200 on http://127.0.0.1:${CONSOLE_PORT}/api/status"
     FAILURES=$((FAILURES + 1))
@@ -42,19 +58,31 @@ fi
 
 # 3. Docker Registry Check (:5000)
 echo
-echo "[+] 3/3 Checking Local Docker Registry (port $REGISTRY_PORT)..."
-if curl -s -f -m 3 "http://127.0.0.1:${REGISTRY_PORT}/v2/" > /dev/null 2>&1; then
-    echo "  [OK] Docker Registry is HEALTHY (Docker Distribution API v2 operational)"
+echo "[+] 3/4 Checking Local Docker Registry (port $REGISTRY_PORT)..."
+REG_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -m 3 "http://127.0.0.1:${REGISTRY_PORT}/v2/" || echo "000")
+if [ "$REG_STATUS" = "200" ]; then
+    echo "  [OK] Docker Registry is HEALTHY (Docker Distribution API v2 operational, HTTP 200)"
 else
-    echo "  [FAIL] Docker Registry unreachable on http://127.0.0.1:${REGISTRY_PORT}/v2/"
+    echo "  [FAIL] Docker Registry returned HTTP status $REG_STATUS on http://127.0.0.1:${REGISTRY_PORT}/v2/"
     FAILURES=$((FAILURES + 1))
 fi
 
 # 4. Systemd Units Status
 echo
-echo "[+] Systemd Service Unit States:"
-systemctl is-active pipejack-ci.service >/dev/null 2>&1 && echo "  * pipejack-ci.service:           ACTIVE (running)" || echo "  * pipejack-ci.service:           INACTIVE / FAILED"
-systemctl is-active pipejack-demo-console.service >/dev/null 2>&1 && echo "  * pipejack-demo-console.service: ACTIVE (running)" || echo "  * pipejack-demo-console.service: INACTIVE / FAILED"
+echo "[+] 4/4 Checking Systemd Service Unit States..."
+if systemctl is-active --quiet pipejack-ci.service; then
+    echo "  [OK] pipejack-ci.service:           ACTIVE (running)"
+else
+    echo "  [FAIL] pipejack-ci.service:         INACTIVE or FAILED"
+    FAILURES=$((FAILURES + 1))
+fi
+
+if systemctl is-active --quiet pipejack-demo-console.service; then
+    echo "  [OK] pipejack-demo-console.service: ACTIVE (running)"
+else
+    echo "  [FAIL] pipejack-demo-console.service: INACTIVE or FAILED"
+    FAILURES=$((FAILURES + 1))
+fi
 
 echo
 echo "============================================================"

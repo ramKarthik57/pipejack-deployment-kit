@@ -37,7 +37,12 @@ const (
 func loadOrCreateKey() (ed25519.PrivateKey, error) {
 	if data, err := os.ReadFile(attestKeyPath); err == nil {
 		if len(data) == ed25519.PrivateKeySize {
-			return ed25519.PrivateKey(data), nil
+			priv := ed25519.PrivateKey(data)
+			pub := priv.Public().(ed25519.PublicKey)
+			if pubData, err := os.ReadFile(attestKeyPath + ".pub"); err != nil || len(pubData) == 0 {
+				_ = os.WriteFile(attestKeyPath+".pub", []byte(hex.EncodeToString(pub)), 0644)
+			}
+			return priv, nil
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(attestKeyPath), 0700); err != nil {

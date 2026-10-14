@@ -2,15 +2,16 @@
 
 This guide provides step-by-step instructions for provisioning two clean Ubuntu virtual machines in VMware Workstation / Fusion / Player and deploying the PipeJack platform using this kit.
 
-> [!NOTE]
-> **Verification Status:** The scripts in this kit have been tested and verified against the live reference VMs. If you are deploying onto brand new, completely fresh virtual machines, follow this guide and execute the acceptance checklist at the end of this document.
+> [!IMPORTANT]
+> **Verification Status & Acceptance Testing:**
+> The deployment scripts, unit test suites, health probes, cryptographic attestation modules, and upload utilities in this kit have been audited and verified against the active reference virtual machines. However, end-to-end automated installation has **not yet been executed on completely fresh, clean virtual machines**. 
+> Follow the exact step-by-step procedure below to deploy onto clean Ubuntu 24.04/22.04 VMs, and validate full system operation using the 10-point Acceptance Checklist at the end of this document.
 
 ---
 
-## 1. Hardware and Resource Prerequisites
+## 1. Hardware, Toolchain and Resource Prerequisites
 
-Each virtual machine should meet the following minimum resource requirements:
-
+### Virtual Machine Resources:
 | Resource | VM1 (Workload Client) | VM2 (Security Orchestrator) |
 | :--- | :--- | :--- |
 | **vCPU** | 2 cores | 4 cores (recommended for concurrent builds) |
@@ -18,6 +19,10 @@ Each virtual machine should meet the following minimum resource requirements:
 | **Disk** | 20 GB | 40 GB (Docker cache + image storage) |
 | **OS** | Ubuntu 24.04 LTS or 22.04 LTS (x86_64) | Ubuntu 24.04 LTS or 22.04 LTS (x86_64) |
 | **Network** | 2 Network Adapters (Host-Only + NAT) | 2 Network Adapters (Host-Only + NAT) |
+
+### Toolchain Prerequisites:
+- **VM2 (Go 1.23+ Required):** Compiling `pipejack-ci` requires Go 1.23 or newer. The reference environment was validated with **Go 1.25.0**. If missing or outdated, `vm2/install.sh` automatically downloads and configures official Go 1.25.0.
+- **VM1 (Archive Generation Tools):** VM1 is provisioned as a lightweight client (Docker, Java, and Maven are deliberately omitted from the default install). However, if you plan to regenerate all 15 workload and attack tarballs from scratch using `build-all-tarballs.sh`, the machine running the script requires `default-jdk` (Java 17+), `maven`, and `npm`. Pre-built or basic tarballs do not require these tools.
 
 ---
 

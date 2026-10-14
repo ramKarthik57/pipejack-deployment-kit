@@ -133,10 +133,23 @@ if [ "$(id -u)" -ne 0 ]; then
     fi
 fi
 
+# Canonical service unit check
+if [ ! -f "$SCRIPT_DIR/deployment/systemd/pipejack-ci.service" ]; then
+    echo "  [-] ERROR: Missing packaged systemd unit: $SCRIPT_DIR/deployment/systemd/pipejack-ci.service" >&2
+    exit 1
+fi
+if [ ! -f "$SCRIPT_DIR/deployment/systemd/pipejack-demo-console.service" ]; then
+    echo "  [-] ERROR: Missing packaged systemd unit: $SCRIPT_DIR/deployment/systemd/pipejack-demo-console.service" >&2
+    exit 1
+fi
+
 if [ $DRY_RUN -eq 1 ]; then
     echo
     echo "============================================================"
     echo " [PREFLIGHT OK] All VM2 prerequisites validated successfully."
+    echo " Package units verified:"
+    echo "   * $SCRIPT_DIR/deployment/systemd/pipejack-ci.service"
+    echo "   * $SCRIPT_DIR/deployment/systemd/pipejack-demo-console.service"
     echo " System is ready for VM2 installation."
     echo "============================================================"
     exit 0
@@ -148,7 +161,6 @@ echo "[+] Step 2: Installing Dependencies (Docker, Go, Python 3, Build Tools)...
 $SUDO apt-get update -y
 $SUDO apt-get install -y --no-install-recommends \
     docker.io \
-    golang-go \
     python3 \
     python3-pip \
     build-essential \
@@ -157,6 +169,47 @@ $SUDO apt-get install -y --no-install-recommends \
     iproute2 \
     psmisc \
     ca-certificates
+
+# Verify Go toolchain (requires Go 1.23+; Go 1.25.0 is the canonical reference version)
+export PATH="/usr/local/go/bin:/usr/local/bin:$PATH"
+
+check_go_installed() {
+    if command -v go >/dev/null 2>&1; then
+        local raw_ver
+        raw_ver=$(go version | awk '{print $3}' | sed 's/go//')
+        local major minor
+        major=$(echo "$raw_ver" | cut -d. -f1)
+        minor=$(echo "$raw_ver" | cut -d. -f2)
+        if [ "$major" -eq 1 ] && [ "$minor" -ge 23 ]; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+if ! check_go_installed; then
+    echo "  Go 1.23+ not found in PATH. Checking /usr/local/go/bin/go..."
+    if [ -x "/usr/local/go/bin/go" ]; then
+        $SUDO ln -sf /usr/local/go/bin/go /usr/local/bin/go
+    else
+        echo "  Installing Go 1.25.0 from official archive..."
+        GO_TAR="go1.25.0.linux-amd64.tar.gz"
+        if [ -f "/home/ubuntu/$GO_TAR" ]; then
+            $SUDO tar -C /usr/local -xzf "/home/ubuntu/$GO_TAR"
+        else
+            TMP_GO=$(mktemp -d)
+            curl -sSL "https://go.dev/dl/$GO_TAR" -o "$TMP_GO/$GO_TAR"
+            $SUDO tar -C /usr/local -xzf "$TMP_GO/$GO_TAR"
+            rm -rf "$TMP_GO"
+        fi
+        $SUDO ln -sf /usr/local/go/bin/go /usr/local/bin/go
+    fi
+fi
+
+# Ensure profile.d configuration exists
+if [ ! -f /etc/profile.d/pipejack-go.sh ]; then
+    echo 'export PATH=$PATH:/usr/local/go/bin' | $SUDO tee /etc/profile.d/pipejack-go.sh >/dev/null
+fi
 
 echo "  Installed docker:  $(docker --version 2>/dev/null || echo 'not active')"
 echo "  Installed go:      $(go version 2>/dev/null || echo 'not active')"
@@ -225,38 +278,22 @@ fi
 
 # --- 5. Cryptographic Keys and Attestation Ledger ---
 echo
-echo "[+] Step 5: Validating Cryptographic Keys and Attestation Ledger..."
+echo "[+] Step 5: Initializing and Cryptographically Verifying Attestation Key..."
 mkdir -p "$KEY_DIR"
 mkdir -p "$ATTEST_DIR"
 chmod 700 "$KEY_DIR"
 
-if [ ! -f "$KEY_DIR/attest-key" ]; then
-    echo "  Generating fresh local Ed25519 signing key for CI attestation ledger..."
-    python3 -c "
-import os
-try:
-    from cryptography.hazmat.primitives.asymmetric import ed25519
-    priv = ed25519.Ed25519PrivateKey.generate()
-    raw = priv.private_bytes_raw()
-    pub = priv.public_key().public_bytes_raw()
-    with open('$KEY_DIR/attest-key', 'wb') as f:
-        f.write(raw)
-    with open('$KEY_DIR/attest-key.pub', 'w') as f:
-        f.write(pub.hex())
-except Exception:
-    # Fallback to 32-byte secure random seed if cryptography not installed
-    seed = os.urandom(32)
-    with open('$KEY_DIR/attest-key', 'wb') as f:
-        f.write(seed)
-    with open('$KEY_DIR/attest-key.pub', 'w') as f:
-        f.write(seed.hex())
-"
-    chmod 600 "$KEY_DIR/attest-key"
-    chmod 644 "$KEY_DIR/attest-key.pub" 2>/dev/null || true
-    echo "  Generated new key: $KEY_DIR/attest-key"
+# Initialize and verify Ed25519 signing key using the actual Go implementation
+if [ -x "$BIN_DST" ]; then
+    $BIN_DST --init-key
+    $BIN_DST --verify-key
 else
-    echo "  Preserving existing signing key at $KEY_DIR/attest-key (idempotent preservation)."
+    (cd "$SCRIPT_DIR/services/custom-ci" && go run . --init-key && go run . --verify-key)
 fi
+
+chmod 600 "$KEY_DIR/attest-key"
+chmod 644 "$KEY_DIR/attest-key.pub" 2>/dev/null || true
+echo "  Key pair verified at $KEY_DIR/attest-key (mode 0600) and $KEY_DIR/attest-key.pub (mode 0644)."
 
 # --- 6. Demo Console Installation ---
 echo
@@ -275,15 +312,19 @@ fi
 
 # --- 7. Systemd Service Deployment & Activation ---
 echo
-echo "[+] Step 7: Configuring Systemd Service Units..."
-if [ -f "$SCRIPT_DIR/deployment/systemd/pipejack-ci.service" ]; then
-    $SUDO cp "$SCRIPT_DIR/deployment/systemd/pipejack-ci.service" /etc/systemd/system/pipejack-ci.service
-fi
+echo "[+] Step 7: Configuring Systemd Service Units from Canonical Packaging..."
+CI_UNIT_SRC="$SCRIPT_DIR/deployment/systemd/pipejack-ci.service"
+CONSOLE_UNIT_SRC="$SCRIPT_DIR/deployment/systemd/pipejack-demo-console.service"
 
-if [ -f "$SCRIPT_DIR/demo/demo-console/pipejack-demo-console.service" ]; then
-    $SUDO cp "$SCRIPT_DIR/demo/demo-console/pipejack-demo-console.service" /etc/systemd/system/pipejack-demo-console.service
-elif [ -f "/etc/systemd/system/pipejack-demo-console.service" ]; then
-    echo "  Preserving existing /etc/systemd/system/pipejack-demo-console.service"
+$SUDO cp "$CI_UNIT_SRC" /etc/systemd/system/pipejack-ci.service
+$SUDO cp "$CONSOLE_UNIT_SRC" /etc/systemd/system/pipejack-demo-console.service
+
+# Verify unit files with systemd-analyze if available
+if command -v systemd-analyze >/dev/null 2>&1; then
+    echo "  Validating unit syntax with systemd-analyze verify..."
+    systemd-analyze verify /etc/systemd/system/pipejack-ci.service
+    systemd-analyze verify /etc/systemd/system/pipejack-demo-console.service
+    echo "  [OK] Both systemd service units passed verification."
 fi
 
 $SUDO systemctl daemon-reload
@@ -298,6 +339,21 @@ if [ $NO_RESTART -eq 0 ]; then
 
     echo "  Waiting 2 seconds for services to initialize..."
     sleep 2
+
+    # Verify service activation status
+    if ! systemctl is-active --quiet pipejack-ci.service; then
+        echo "  [-] ERROR: pipejack-ci.service failed to activate!" >&2
+        $SUDO journalctl -u pipejack-ci -n 25 --no-pager >&2 || true
+        exit 1
+    fi
+    echo "  [OK] pipejack-ci.service is active and running."
+
+    if ! systemctl is-active --quiet pipejack-demo-console.service; then
+        echo "  [-] ERROR: pipejack-demo-console.service failed to activate!" >&2
+        $SUDO journalctl -u pipejack-demo-console -n 25 --no-pager >&2 || true
+        exit 1
+    fi
+    echo "  [OK] pipejack-demo-console.service is active and running."
 fi
 
 # --- 8. Health Verification ---
@@ -305,7 +361,10 @@ echo
 echo "[+] Step 8: Verifying Service Health..."
 if [ -f "$SCRIPT_DIR/scripts/health-check.sh" ]; then
     chmod +x "$SCRIPT_DIR/scripts/health-check.sh"
-    "$SCRIPT_DIR/scripts/health-check.sh" || echo "  [!] Initial health check returned warnings; check logs."
+    if ! "$SCRIPT_DIR/scripts/health-check.sh"; then
+        echo "  [-] ERROR: Health check probes failed after installation!" >&2
+        exit 1
+    fi
 fi
 
 echo

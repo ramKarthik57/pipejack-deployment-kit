@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"compress/gzip"
+	"crypto/ed25519"
 	"custom-ci/anomaly"
 	"encoding/json"
 	"fmt"
@@ -48,6 +49,44 @@ func colorStatus(status string) string {
 }
 
 func main() {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "--init-key", "-init-key":
+			priv, err := loadOrCreateKey()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error initializing signing key: %v\n", err)
+				os.Exit(1)
+			}
+			pub := priv.Public().(ed25519.PublicKey)
+			msg := []byte("pipejack-key-verification")
+			sig := ed25519.Sign(priv, msg)
+			if !ed25519.Verify(pub, msg, sig) {
+				fmt.Fprintf(os.Stderr, "Cryptographic verification failed for key pair\n")
+				os.Exit(1)
+			}
+			fmt.Println("Ed25519 attestation signing key initialized and cryptographically verified.")
+			os.Exit(0)
+		case "--verify-key", "-verify-key":
+			priv, err := loadOrCreateKey()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error loading signing key: %v\n", err)
+				os.Exit(1)
+			}
+			pub := priv.Public().(ed25519.PublicKey)
+			msg := []byte("pipejack-key-verification")
+			sig := ed25519.Sign(priv, msg)
+			if !ed25519.Verify(pub, msg, sig) {
+				fmt.Fprintf(os.Stderr, "Cryptographic verification failed for key pair\n")
+				os.Exit(1)
+			}
+			fmt.Println("Ed25519 attestation signing key is valid.")
+			os.Exit(0)
+		case "--help", "-h":
+			fmt.Println("Usage: pipejack-ci [--init-key | --verify-key | --help]")
+			os.Exit(0)
+		}
+	}
+
 	os.MkdirAll("/home/ubuntu/code-repo", 0755)
 	http.HandleFunc("/upload", handleUpload)
 

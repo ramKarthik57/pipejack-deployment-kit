@@ -58,6 +58,10 @@ Execute the installer on VM2:
 ./install.sh
 ```
 
+### Toolchain Prerequisites
+- **Go Toolchain:** Go 1.23 or newer is required to compile the `pipejack-ci` server (the binary uses modern language features and toolchain libraries). The environment was tested and validated with **Go 1.25.0** (`go version go1.25.0 linux/amd64`).
+- **Automatic Toolchain Acquisition:** If Go is missing or older than 1.23, `vm2/install.sh` automatically downloads and configures the official Go 1.25.0 tarball to `/usr/local/go` and links `/usr/local/bin/go`.
+
 ### Options
 - `--dry-run`: Verifies OS distribution, disk space, and prerequisites without modifying system state.
 - `--skip-build`: Skips compiling Go source binaries if `/usr/local/bin/pipejack-ci` is already present.

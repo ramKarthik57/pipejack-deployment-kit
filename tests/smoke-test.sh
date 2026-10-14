@@ -57,7 +57,7 @@ fi
 
 # 5. Live Pipeline Upload Test (Non-destructive clean workload test)
 echo
-echo "[+] 5/5 Executing Live Pipeline Verification (Upload Test)..."
+echo "[+] 5/5 Executing Live Pipeline Verification (Upload & Ledger Attestation Test)..."
 TMP_DIR=$(mktemp -d)
 cat << 'EOF' > "$TMP_DIR/package.json"
 {
@@ -80,17 +80,60 @@ rm -rf "$TMP_DIR"
 
 echo "  Created temporary smoke workload: $TARBALL"
 UPLOAD_SCRIPT="$ROOT_DIR/vm1/scripts/pipejack-upload.sh"
+
 if [ -x "$UPLOAD_SCRIPT" ]; then
-    CI_ENDPOINT="http://127.0.0.1:8888/upload" "$UPLOAD_SCRIPT" "$TARBALL" > /tmp/smoke-upload.log 2>&1 || true
-    cat /tmp/smoke-upload.log | tail -15
-    if grep -q "ALLOW" /tmp/smoke-upload.log || grep -q "SUCCESS" /tmp/smoke-upload.log || grep -q "PASS" /tmp/smoke-upload.log; then
-        echo "  [OK] Pipeline returned expected ALLOW verdict for clean workload."
+    # Record baseline attestation count from Demo Console
+    INITIAL_COUNT=$(curl -s -m 3 http://127.0.0.1:8090/api/status 2>/dev/null | jq -r '.attestation_count // 0' || echo "0")
+    echo "  Baseline attestation count: $INITIAL_COUNT"
+
+    UPLOAD_LOG="/tmp/smoke-upload-$$.log"
+    if "$UPLOAD_SCRIPT" --endpoint "http://127.0.0.1:8888/upload" "$TARBALL" > "$UPLOAD_LOG" 2>&1; then
+        echo "  [OK] Upload script executed with exit code 0."
+        cat "$UPLOAD_LOG" | tail -10
+
+        # Query Demo Console status and verify attestation recorded
+        sleep 2
+        STATUS_JSON=$(curl -s -m 3 http://127.0.0.1:8090/api/status 2>/dev/null || echo "{}")
+        NEW_COUNT=$(echo "$STATUS_JSON" | jq -r '.attestation_count // 0' 2>/dev/null || echo "0")
+        LATEST_VERDICT=$(echo "$STATUS_JSON" | jq -r '.latest_attestation.verdict // empty' 2>/dev/null || echo "")
+        LATEST_BUILD_ID=$(echo "$STATUS_JSON" | jq -r '.latest_attestation.build_id // empty' 2>/dev/null || echo "")
+
+        if [ "$NEW_COUNT" -ge "$((INITIAL_COUNT + 1))" ] && [ "$LATEST_VERDICT" = "ALLOW" ] && [ -n "$LATEST_BUILD_ID" ]; then
+            ATTEST_FILE="/home/ubuntu/pipejack-attestations/${LATEST_BUILD_ID}.json"
+            if [ -f "$ATTEST_FILE" ]; then
+                SIG=$(jq -r '.signature // empty' "$ATTEST_FILE" 2>/dev/null || echo "")
+                HASH=$(jq -r '.self_hash // empty' "$ATTEST_FILE" 2>/dev/null || echo "")
+                if [ -n "$SIG" ] && [ -n "$HASH" ]; then
+                    echo "  [OK] Clean workload attestation verified in VM2 ledger:"
+                    echo "       Build ID:  $LATEST_BUILD_ID"
+                    echo "       Verdict:   $LATEST_VERDICT"
+                    echo "       Self-Hash: $HASH"
+                    echo "       Signature: ${SIG:0:32}..."
+                    echo "       Ledger:    $NEW_COUNT records (incremented from $INITIAL_COUNT)"
+                else
+                    echo "  [-] FAIL: Attestation file $ATTEST_FILE missing cryptographic signature or self_hash!"
+                    FAILURES=$((FAILURES + 1))
+                fi
+            else
+                echo "  [-] FAIL: Expected attestation ledger file $ATTEST_FILE not found on disk!"
+                FAILURES=$((FAILURES + 1))
+            fi
+        else
+            echo "  [-] FAIL: Attestation ledger not updated with ALLOW verdict! Count: $NEW_COUNT (was $INITIAL_COUNT), Verdict: '$LATEST_VERDICT'"
+            FAILURES=$((FAILURES + 1))
+        fi
     else
-        echo "  [-] Unexpected pipeline response for clean workload!"
+        UPLOAD_RC=$?
+        echo "  [-] FAIL: Upload script exited with non-zero code ($UPLOAD_RC)!"
+        cat "$UPLOAD_LOG" | tail -15
         FAILURES=$((FAILURES + 1))
     fi
+    rm -f "$UPLOAD_LOG"
+else
+    echo "  [-] FAIL: Upload script $UPLOAD_SCRIPT not executable!"
+    FAILURES=$((FAILURES + 1))
 fi
-rm -f "$TARBALL" /tmp/smoke-upload.log
+rm -f "$TARBALL"
 
 echo
 echo "============================================================"
