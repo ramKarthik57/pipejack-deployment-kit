@@ -1,0 +1,18 @@
+# PipeJack VM2 — Sample Netplan Configuration
+# Place in /etc/netplan/01-netcfg.yaml and run: sudo netplan apply
+
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    # Interface 1: Private Inter-VM Host-Only Network (VMnet8 or custom lab switch)
+    ens33:
+      dhcp4: no
+      addresses:
+        - 192.168.88.133/24
+
+    # Interface 2: Management / NAT Network with Default Gateway (for Docker hub / updates)
+    ens37:
+      dhcp4: yes
+      dhcp4-overrides:
+        route-metric: 101

@@ -1,0 +1,5 @@
+# PipeJack Cluster Host Mappings
+# Append to /etc/hosts on both VM1 and VM2
+
+192.168.88.132  vm1.pipejack.local vm1
+192.168.88.133  vm2.pipejack.local vm2

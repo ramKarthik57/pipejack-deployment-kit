@@ -1,0 +1,23 @@
+[Unit]
+Description=PipeJack CI Server
+Documentation=https://github.com/ramKarthik57/pipejack-platform
+After=docker.service network.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/custom-ci
+EnvironmentFile=/etc/pipejack/ci.env
+ExecStart=/usr/local/bin/pipejack-ci
+Restart=on-failure
+RestartSec=3
+StandardOutput=append:/var/log/pipejack-ci.log
+StandardError=append:/var/log/pipejack-ci.log
+
+# Give the service access to the Docker socket
+SupplementaryGroups=docker
+
+[Install]
+WantedBy=multi-user.target

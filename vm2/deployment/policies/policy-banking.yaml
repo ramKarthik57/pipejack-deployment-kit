@@ -1,0 +1,39 @@
+version: "1.0"
+pipeline: "spring-boot-build"
+allowed_binaries:
+  - /opt/java/openjdk/bin/java
+  - /opt/java/openjdk/lib/jspawnhelper
+  - /usr/bin/sleep
+  - /usr/local/bin/pipejackd
+  - /runc
+  - /bin/sh
+  - /usr/bin/dash
+  - /usr/bin/env
+  - /usr/bin/echo
+  - /usr/bin/cat
+blocked_binaries:
+  - /usr/bin/curl
+  - /usr/bin/wget
+allowed_filesystem_changes:
+  - pattern: "target/**"
+    action: ignore
+  - pattern: "*.class"
+    action: ignore
+  - pattern: "*.jar"
+    action: ignore
+severity_thresholds:
+  high: 70
+  medium: 40
+  low: 10
+actions_on_violation:
+  block: true
+  quarantine: true
+  alert: true
+
+allowed_egress:
+  - "127.0.0.1:*"
+  - "172.17.0.1:*"
+  - "0.0.0.0/0:443"
+  - "*:53"
+
+enforce_network: true

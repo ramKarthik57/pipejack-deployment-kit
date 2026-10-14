@@ -1,0 +1,59 @@
+version: "1.0"
+pipeline: "python-build"
+allowed_binaries:
+  - /usr/local/bin/python3
+  - /usr/local/bin/python
+  - /usr/local/bin/pip
+  - /usr/local/bin/pip3
+  - /usr/local/bin/python3.12
+  - /usr/local/bin/python3.11
+  - /usr/local/bin/python3.10
+  - /usr/local/bin/pip3.12
+  - /usr/local/bin/pip3.11
+  - /usr/local/bin/pip3.10
+  - /bin/bash
+  - /bin/sh
+  - /usr/bin/dash
+  - /usr/bin/env
+  - /usr/bin/echo
+  - /usr/bin/cat
+  - /usr/bin/sleep
+  - /usr/local/bin/pipejackd
+  - /runc
+  - /bin/busybox
+  - /usr/bin/find
+blocked_binaries:
+  - /usr/bin/curl
+  - /usr/bin/wget
+allowed_filesystem_changes:
+  - pattern: "*.pyc"
+    action: ignore
+  - pattern: "__pycache__/**"
+    action: ignore
+  - pattern: "*.egg-info/**"
+    action: ignore
+  - pattern: "dist/**"
+    action: ignore
+  - pattern: "build/**"
+    action: ignore
+severity_thresholds:
+  high: 70
+  medium: 40
+  low: 10
+actions_on_violation:
+  block: true
+  quarantine: true
+  alert: true
+
+allowed_egress:
+  - "127.0.0.1:*"
+  - "172.17.0.1:*"
+  - "0.0.0.0/0:443"
+  - "*:53"
+
+enforce_network: true
+
+anomaly_enabled: true
+anomaly_threshold: 3.0
+anomaly_min_baseline: 5
+anomaly_block: false

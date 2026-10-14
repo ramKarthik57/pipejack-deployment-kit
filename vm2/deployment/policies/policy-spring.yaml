@@ -1,0 +1,14 @@
+version: "1.0"
+pipeline: "spring-boot-build"
+allowed_binaries:
+  - "*"
+allowed_filesystem_changes:
+  - pattern: "target/**"
+    action: ignore
+  - pattern: "*.class"
+    action: ignore
+  - pattern: "*.jar"
+    action: ignore
+
+allowed_egress:
+  - "*"

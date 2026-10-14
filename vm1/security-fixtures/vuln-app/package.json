@@ -1,0 +1,13 @@
+{
+  "name": "employee-manager",
+  "version": "1.0.0",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "build": "echo 'Build complete'",
+    "test": "echo 'All tests passed'"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}

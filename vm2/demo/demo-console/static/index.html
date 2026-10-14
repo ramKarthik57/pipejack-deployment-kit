@@ -1,0 +1,1864 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PipeJack — Build Security Workspace</title>
+  <link rel="stylesheet" href="/static/vendor/xterm.css">
+  <link rel="stylesheet" href="/static/style.css?v=3">
+</head>
+<body class="mode-engineering">
+  <!-- Application Header -->
+  <header class="app-header">
+    <div class="header-left">
+      <div class="app-title-group">
+        <h1 class="app-title">PipeJack</h1>
+        <span class="app-divider">/</span>
+        <span class="app-subtitle">Build Security Workspace</span>
+      </div>
+      <span class="app-desc">CI/CD Pipeline Integrity &amp; Multi-Sensor Enforcement</span>
+    </div>
+
+    <div class="header-right">
+      <!-- Mode Toggle: Presentation vs Engineering -->
+      <div class="mode-toggle-group" title="Switch between high-level presentation and deep engineering observability">
+        <button class="btn-mode active" id="btn-mode-eng" onclick="setConsoleMode('engineering')">Engineering</button>
+        <button class="btn-mode" id="btn-mode-pres" onclick="setConsoleMode('presentation')">Presentation</button>
+      </div>
+
+      <div class="header-meta">
+        <span class="meta-item">
+          <span class="meta-label">Service:</span>
+          <span class="status-dot dot-active" id="dot-service"></span>
+          <span class="meta-val" id="meta-service">Active</span>
+        </span>
+        <span class="meta-item">
+          <span class="meta-label">Health:</span>
+          <span class="meta-val text-success" id="meta-health">200 OK</span>
+        </span>
+        <span class="meta-item">
+          <span class="meta-label">Enforcement:</span>
+          <span class="badge-enforce">Enabled</span>
+        </span>
+        <span class="meta-item">
+          <span class="meta-label">Baseline:</span>
+          <code class="meta-code" id="meta-baseline">eb63577</code>
+        </span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main 12-Column Grid Layout -->
+  <div class="app-container">
+    
+    <!-- Left Column: Demo Actions & Controls (4 cols) -->
+    <aside class="left-panel">
+      
+      <!-- Demonstrations Scenario List -->
+      <section class="panel-section">
+        <div class="section-title-row">
+          <h2 class="section-title">DEMO ACTIONS</h2>
+          <span class="scenario-counter" id="scenario-counter">10 Scenarios</span>
+        </div>
+
+        <!-- Scenario Search & Filter Bar -->
+        <div class="scenario-search-wrap" style="margin-bottom: 8px;">
+          <input type="text" class="scenario-search-input" id="scenario-search-box" placeholder="🔍 Search scenarios..." oninput="searchScenarios(this.value)">
+        </div>
+
+        <div class="scenario-filter-bar">
+          <button class="chip-filter filter-chip active" id="chip-filter-all" onclick="filterScenarios('all')">ALL</button>
+          <button class="chip-filter filter-chip" id="chip-filter-java" onclick="filterScenarios('java')">JAVA</button>
+          <button class="chip-filter filter-chip" id="chip-filter-node" onclick="filterScenarios('node')">NODE.JS</button>
+          <button class="chip-filter filter-chip" id="chip-filter-python" onclick="filterScenarios('python')">PYTHON</button>
+          <button class="chip-filter filter-chip" id="chip-filter-advanced" onclick="filterScenarios('advanced')">ADVANCED</button>
+        </div>
+
+        <div class="scenario-list" id="main-scenario-list">
+          
+          <!-- 1. Clean Java -->
+          <div class="scenario-row row-allow" id="row-clean-java" data-lang="java" data-category="java">
+            <div class="scenario-card-header">
+              <div class="scenario-header-left">
+                <span class="scenario-lang-tag tag-java">JAVA 17</span>
+                <span class="scenario-name">Clean Java</span>
+              </div>
+              <div class="scenario-header-right">
+                <span class="badge-verdict-preview preview-allow">ALLOW</span>
+              </div>
+            </div>
+            <div class="scenario-card-body">
+              <span class="scenario-sub">Banking API • Legitimate Maven build</span>
+              <button class="btn btn-action" id="btn-clean-java" onclick="runScenario('clean-java')"><span class="btn-icon">▶</span> Run</button>
+            </div>
+          </div>
+
+          <!-- 2. Malicious Java (Hero Demo) -->
+          <div class="scenario-row scenario-hero row-block" id="row-malicious-java" data-lang="java" data-category="java">
+            <div class="scenario-card-header">
+              <div class="scenario-header-left">
+                <span class="scenario-lang-tag tag-java">JAVA 17</span>
+                <span class="scenario-name">Malicious Java</span>
+                <span class="hero-tag">HERO</span>
+              </div>
+              <div class="scenario-header-right">
+                <span class="badge-verdict-preview preview-block">BLOCK</span>
+              </div>
+            </div>
+            <div class="scenario-card-body">
+              <span class="scenario-sub">Process (/usr/bin/curl) + Backdoor + Egress</span>
+              <button class="btn btn-action btn-hero" id="btn-malicious-java" onclick="runScenario('malicious-java')"><span class="btn-icon">▶</span> Run</button>
+            </div>
+          </div>
+
+          <!-- 3. Clean Node.js -->
+          <div class="scenario-row row-allow" id="row-clean-node" data-lang="node" data-category="node">
+            <div class="scenario-card-header">
+              <div class="scenario-header-left">
+                <span class="scenario-lang-tag tag-node">NODE 18</span>
+                <span class="scenario-name">Clean Node.js</span>
+              </div>
+              <div class="scenario-header-right">
+                <span class="badge-verdict-preview preview-allow">ALLOW</span>
+              </div>
+            </div>
+            <div class="scenario-card-body">
+              <span class="scenario-sub">Payment Service • npm install &amp; test</span>
+              <button class="btn btn-action" id="btn-clean-node" onclick="runScenario('clean-node')"><span class="btn-icon">▶</span> Run</button>
+            </div>
+          </div>
+
+          <!-- 4. Malicious Node.js (Egress) -->
+          <div class="scenario-row row-block" id="row-malicious-node" data-lang="node" data-category="node">
+            <div class="scenario-card-header">
+              <div class="scenario-header-left">
+                <span class="scenario-lang-tag tag-node">NODE 18</span>
+                <span class="scenario-name">Malicious Node.js</span>
+              </div>
+              <div class="scenario-header-right">
+                <span class="badge-verdict-preview preview-block">BLOCK</span>
+              </div>
+            </div>
+            <div class="scenario-card-body">
+              <span class="scenario-sub">Outbound network egress to 10.255.255.1:80</span>
+              <button class="btn btn-action" id="btn-malicious-node" onclick="runScenario('malicious-node')"><span class="btn-icon">▶</span> Run</button>
+            </div>
+          </div>
+
+          <!-- 5. Malicious Node.js (Tamper) -->
+          <div class="scenario-row row-block" id="row-malicious-node-egress" data-lang="node" data-category="node">
+            <div class="scenario-card-header">
+              <div class="scenario-header-left">
+                <span class="scenario-lang-tag tag-node">NODE 18</span>
+                <span class="scenario-name">Node.js Tamper</span>
+              </div>
+              <div class="scenario-header-right">
+                <span class="badge-verdict-preview preview-block">BLOCK</span>
+              </div>
+            </div>
+            <div class="scenario-card-body">
+              <span class="scenario-sub">Dependency postinstall source modification</span>
+              <button class="btn btn-action" id="btn-malicious-node-egress" onclick="runScenario('malicious-node-egress')"><span class="btn-icon">▶</span> Run</button>
+            </div>
+          </div>
+
+          <!-- 6. Clean Python -->
+          <div class="scenario-row row-allow" id="row-clean-python" data-lang="python" data-category="python">
+            <div class="scenario-card-header">
+              <div class="scenario-header-left">
+                <span class="scenario-lang-tag tag-python">PYTHON 3.12</span>
+                <span class="scenario-name">Clean Python</span>
+              </div>
+              <div class="scenario-header-right">
+                <span class="badge-verdict-preview preview-allow">ALLOW</span>
+              </div>
+            </div>
+            <div class="scenario-card-body">
+              <span class="scenario-sub">Calculator API • Wheel packaging</span>
+              <button class="btn btn-action" id="btn-clean-python" onclick="runScenario('clean-python')"><span class="btn-icon">▶</span> Run</button>
+            </div>
+          </div>
+
+          <!-- 7. Malicious Python (In-Memory Hook) -->
+          <div class="scenario-row row-block" id="row-malicious-python" data-lang="python" data-category="python">
+            <div class="scenario-card-header">
+              <div class="scenario-header-left">
+                <span class="scenario-lang-tag tag-python">PYTHON 3.12</span>
+                <span class="scenario-name">Malicious Python</span>
+              </div>
+              <div class="scenario-header-right">
+                <span class="badge-verdict-preview preview-block">BLOCK</span>
+              </div>
+            </div>
+            <div class="scenario-card-body">
+              <span class="scenario-sub">setup.py in-memory socket exfiltration</span>
+              <button class="btn btn-action" id="btn-malicious-python" onclick="runScenario('malicious-python')"><span class="btn-icon">▶</span> Run</button>
+            </div>
+          </div>
+
+          <!-- 8. Malicious Python (Socket Exfil) -->
+          <div class="scenario-row row-block" id="row-malicious-python-egress" data-lang="python" data-category="python">
+            <div class="scenario-card-header">
+              <div class="scenario-header-left">
+                <span class="scenario-lang-tag tag-python">PYTHON 3.12</span>
+                <span class="scenario-name">Python Exfil</span>
+              </div>
+              <div class="scenario-header-right">
+                <span class="badge-verdict-preview preview-block">BLOCK</span>
+              </div>
+            </div>
+            <div class="scenario-card-body">
+              <span class="scenario-sub">Background compiler credential exfil</span>
+              <button class="btn btn-action" id="btn-malicious-python-egress" onclick="runScenario('malicious-python-egress')"><span class="btn-icon">▶</span> Run</button>
+            </div>
+          </div>
+
+          <!-- 9. Behavioral Anomaly -->
+          <div class="scenario-row row-warn" id="row-anomaly" data-lang="advanced" data-category="advanced">
+            <div class="scenario-card-header">
+              <div class="scenario-header-left">
+                <span class="scenario-lang-tag tag-anom">ANOMALY</span>
+                <span class="scenario-name">Anomaly Demo</span>
+              </div>
+              <div class="scenario-header-right">
+                <span class="badge-verdict-preview preview-warn">ADVISORY</span>
+              </div>
+            </div>
+            <div class="scenario-card-body">
+              <span class="scenario-sub">3-Sigma statistical baseline variance</span>
+              <button class="btn btn-action" id="btn-anomaly" onclick="runScenario('anomaly')"><span class="btn-icon">▶</span> Run</button>
+            </div>
+          </div>
+
+          <!-- 10. Quarantine Fail-Closed -->
+          <div class="scenario-row row-block" id="row-quarantine-tamper" data-lang="advanced" data-category="advanced">
+            <div class="scenario-card-header">
+              <div class="scenario-header-left">
+                <span class="scenario-lang-tag tag-sec">SECURITY</span>
+                <span class="scenario-name">Quarantine Tamper</span>
+              </div>
+              <div class="scenario-header-right">
+                <span class="badge-verdict-preview preview-block">BLOCK</span>
+              </div>
+            </div>
+            <div class="scenario-card-body">
+              <span class="scenario-sub">Fail-closed registry containment test</span>
+              <button class="btn btn-action" id="btn-quarantine-tamper" onclick="runScenario('quarantine-tamper')"><span class="btn-icon">▶</span> Run</button>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- Sequential Full Demo -->
+      <section class="panel-section">
+        <div class="section-title-row">
+          <h2 class="section-title">ONE-CLICK SEQUENCE</h2>
+        </div>
+        <div class="full-demo-trigger-card">
+          <p class="full-demo-desc">Executes sequential end-to-end panel sequence across all vectors and finishes with cryptographic ledger verification.</p>
+          <button class="btn btn-action btn-full-demo" id="btn-full-demo" onclick="runFullDemoSequence()">
+            <span class="icon-play">▶</span> Run Full Sequence
+          </button>
+        </div>
+      </section>
+
+      <!-- System & Audit Operations -->
+      <section class="panel-section">
+        <div class="section-title-row">
+          <h2 class="section-title">VERIFICATION &amp; SYSTEM</h2>
+        </div>
+        <div class="ops-list">
+          <div class="op-row">
+            <div class="op-meta">
+              <span class="op-name">Verify Attestation</span>
+              <span class="op-sub">Cryptographic chain audit</span>
+            </div>
+            <button class="btn btn-subtle" id="btn-verify" onclick="triggerAttestationAudit()">Verify</button>
+          </div>
+          <div class="op-row">
+            <div class="op-meta">
+              <span class="op-name">Clean vs Malicious</span>
+              <span class="op-sub">Multi-scenario comparison</span>
+            </div>
+            <button class="btn btn-subtle" id="btn-compare" onclick="switchWorkspaceTab('comparison')">Compare</button>
+          </div>
+          <div class="op-row">
+            <div class="op-meta">
+              <span class="op-name">System Health</span>
+              <span class="op-sub">Query CI daemon (:8888)</span>
+            </div>
+            <button class="btn btn-subtle" id="btn-check-system" onclick="checkSystem()">Check</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- System Status Compact Table -->
+      <section class="panel-section section-status-compact">
+        <div class="status-table">
+          <div class="status-row">
+            <span class="s-label">CI Server</span>
+            <span class="s-val" id="sys-ci-status">Connected</span>
+          </div>
+          <div class="status-row">
+            <span class="s-label">Port</span>
+            <span class="s-val mono">8888</span>
+          </div>
+          <div class="status-row">
+            <span class="s-label">Daemon</span>
+            <span class="s-val" id="sys-service-status">pipejack-ci.service</span>
+          </div>
+          <div class="status-row">
+            <span class="s-label">Signed Ledger</span>
+            <span class="s-val" id="sys-ledger-count">-- records</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Operational Info Footnote -->
+      <div class="panel-footer-note">
+        <span>Target: <code>192.168.88.133:8888</code></span>
+        <span>Baseline: <code>eb63577</code></span>
+      </div>
+
+    </aside>
+
+    <!-- Right Column: MAIN CENTRAL WORKSPACE (8 cols) -->
+    <main class="right-panel">
+
+      <!-- Workspace Top Navigation Bar -->
+      <div class="workspace-header-bar">
+        <div class="workspace-title-group">
+          <div class="context-pill-row">
+            <span class="workspace-context-badge badge-idle" id="ws-context-badge">IDLE</span>
+            <span class="active-scenario-tag" id="ws-scenario-tag">No build active</span>
+          </div>
+          <h2 class="workspace-title" id="ws-title">Central Workspace</h2>
+        </div>
+
+        <!-- Central Workspace Tabs -->
+        <div class="workspace-tabs-nav" role="tablist">
+          <button class="ws-tab-btn active" id="tab-btn-terminal" onclick="switchWorkspaceTab('terminal')">
+            <span class="tab-icon">⌘</span> Terminal
+          </button>
+          <button class="ws-tab-btn" id="tab-btn-output" onclick="switchWorkspaceTab('output')">
+            <span class="tab-icon">📋</span> Build Output
+          </button>
+          <button class="ws-tab-btn" id="tab-btn-security" onclick="switchWorkspaceTab('security')">
+            <span class="tab-icon">🛡</span> Security
+          </button>
+          <button class="ws-tab-btn" id="tab-btn-attestation" onclick="switchWorkspaceTab('attestation')">
+            <span class="tab-icon">🔏</span> Attestation
+          </button>
+          <button class="ws-tab-btn" id="tab-btn-comparison" onclick="switchWorkspaceTab('comparison')">
+            <span class="tab-icon">⚖</span> Comparison
+          </button>
+          <button class="ws-tab-btn" id="tab-btn-playground" onclick="switchWorkspaceTab('playground')">
+            <span class="tab-icon">🚀</span> App Playground
+          </button>
+        </div>
+      </div>
+
+      <!-- Live Build Progress Bar (Visible while running or active) -->
+      <div class="progress-bar-container" id="progress-container" style="display: none;">
+        <div class="progress-header">
+          <div class="progress-title-meta">
+            <span class="status-dot dot-active"></span>
+            <span class="progress-title" id="progress-title">Build Pipeline in Progress</span>
+          </div>
+          <span class="progress-timer" id="progress-timer">0.0s elapsed</span>
+        </div>
+        <div class="pipeline-steps">
+          <div class="p-step" id="p-upload">
+            <span class="p-icon">✓</span>
+            <span class="p-text">Upload</span>
+          </div>
+          <div class="p-step" id="p-build">
+            <span class="p-icon">●</span>
+            <span class="p-text">Build</span>
+          </div>
+          <div class="p-step" id="p-analysis">
+            <span class="p-icon">○</span>
+            <span class="p-text">Security analysis</span>
+          </div>
+          <div class="p-step" id="p-verdict">
+            <span class="p-icon">○</span>
+            <span class="p-text">Verdict</span>
+          </div>
+          <div class="p-step" id="p-artifact">
+            <span class="p-icon">○</span>
+            <span class="p-text">Artifact handling</span>
+          </div>
+          <div class="p-step" id="p-attest">
+            <span class="p-icon">○</span>
+            <span class="p-text">Attestation</span>
+          </div>
+        </div>
+        <!-- Live Milestones Event Ticker -->
+        <div class="events-ticker-bar" id="events-ticker-bar">
+          <span class="ticker-label">LATEST MILESTONE:</span>
+          <span class="ticker-text" id="latest-event-text">Pipeline initiated...</span>
+        </div>
+      </div>
+
+      <!-- One-Click Full Demo Sequence Progress Rail -->
+      <div class="full-demo-rail" id="full-demo-rail" style="display: none;">
+        <div class="rail-header">
+          <span class="rail-title">FULL DEMO AUTOMATED EXECUTION</span>
+          <span class="rail-counter" id="rail-counter">Step 1 of 6</span>
+        </div>
+        <div class="rail-steps">
+          <div class="rail-step" id="fd-step-1"><span class="r-num">01</span> Clean Java <span class="r-badge" id="fd-badge-1">○</span></div>
+          <div class="rail-step" id="fd-step-2"><span class="r-num">02</span> Malicious Java <span class="r-badge" id="fd-badge-2">○</span></div>
+          <div class="rail-step" id="fd-step-3"><span class="r-num">03</span> Malicious Node.js <span class="r-badge" id="fd-badge-3">○</span></div>
+          <div class="rail-step" id="fd-step-4"><span class="r-num">04</span> Malicious Python <span class="r-badge" id="fd-badge-4">○</span></div>
+          <div class="rail-step" id="fd-step-5"><span class="r-num">05</span> Anomaly Demo <span class="r-badge" id="fd-badge-5">○</span></div>
+          <div class="rail-step" id="fd-step-6"><span class="r-num">06</span> Attestation Audit <span class="r-badge" id="fd-badge-6">○</span></div>
+        </div>
+      </div>
+
+      <!-- In-app Error Banner -->
+      <div class="build-error-banner" id="build-error-banner" style="display: none;">
+        <div class="error-banner-main">
+          <span class="error-banner-icon">⚠️</span>
+          <div class="error-banner-text">
+            <strong id="error-banner-title">Build Execution Error</strong>
+            <p id="error-banner-desc">An error occurred while executing the build pipeline.</p>
+          </div>
+        </div>
+        <div class="error-banner-actions">
+          <button class="btn btn-secondary btn-sm" id="btn-error-retry">Retry Build</button>
+          <button class="btn-close-banner" onclick="dismissErrorBanner()" aria-label="Dismiss">&times;</button>
+        </div>
+      </div>
+
+      <!-- Central Workspace Viewport -->
+      <div class="workspace-viewport">
+
+        <!-- ===================================================================
+             VIEW 1: LIVE SPLIT TERMINAL (VM-1 & VM-2)
+             =================================================================== -->
+        <div class="ws-view" id="view-terminal">
+          
+          <!-- Current Build Context Bar & Ratio Controls -->
+          <div class="terminal-context-bar" id="terminal-context-bar">
+            <div class="term-ctx-group">
+              <div class="term-ctx-item">
+                <span class="ctx-label">CURRENT BUILD:</span>
+                <strong class="ctx-val" id="ctx-project">No build active</strong>
+              </div>
+              <div class="term-ctx-item">
+                <span class="ctx-label">RUNTIME:</span>
+                <span class="ctx-val" id="ctx-runtime">Standby</span>
+              </div>
+              <div class="term-ctx-item">
+                <span class="ctx-label">BUILD ID:</span>
+                <code class="ctx-val mono" id="ctx-build-id">--</code>
+              </div>
+            </div>
+            <div class="term-ctx-status">
+              <div class="term-split-controls">
+                <button class="btn btn-tiny btn-split-ratio active" id="btn-split-50" onclick="setSplitRatio('50-50')">50:50</button>
+                <button class="btn btn-tiny btn-split-ratio" id="btn-split-60" onclick="setSplitRatio('60-40')">60:40</button>
+                <button class="btn btn-tiny btn-split-ratio" id="btn-split-40" onclick="setSplitRatio('40-60')">40:60</button>
+                <button class="btn btn-tiny btn-expand-ctrl" id="btn-expand-term" onclick="toggleExpandTerminal()">⛶ Expand</button>
+              </div>
+              <span class="term-status-badge badge-idle" id="ctx-status-badge">READY</span>
+            </div>
+          </div>
+
+          <!-- Live Completion Banner (stays on terminal view, gives instant action jumps) -->
+          <div class="term-completion-banner" id="term-completion-banner" style="display: none;">
+            <div class="term-banner-left">
+              <span class="term-banner-badge badge-allow" id="term-banner-badge">ALLOW</span>
+              <strong class="term-banner-title" id="term-banner-title">Build execution completed</strong>
+              <span class="term-banner-meta" id="term-banner-meta">HTTP 200 OK • 1.4s</span>
+            </div>
+            <div class="term-banner-actions">
+              <button class="btn btn-tiny btn-banner-action" onclick="switchWorkspaceTab('output')">📋 View Build Output</button>
+              <button class="btn btn-tiny btn-banner-secondary" onclick="switchWorkspaceTab('security')">🛡 View Security Analysis</button>
+              <button class="btn btn-tiny btn-banner-subtle" onclick="switchWorkspaceTab('attestation')">🔏 Attestation</button>
+              <button class="btn-close-banner" onclick="dismissTermBanner()" title="Dismiss">&times;</button>
+            </div>
+          </div>
+
+          <div class="split-terminal-container split-50-50" id="split-term-container">
+            
+            <!-- VM-1 Developer Real Interactive Terminal -->
+            <div class="term-col term-vm1" id="col-term-vm1">
+              <div class="term-header">
+                <div class="term-title-wrap">
+                  <span class="term-tag tag-vm1">VM-1</span>
+                  <span class="term-role" title="Developer Client (192.168.88.132)">Developer</span>
+                  <span class="term-stream-indicator" id="vm1-stream-indicator">
+                    <span class="dot-indicator"></span> <span class="indicator-text" id="vm1-status-text">Connected</span>
+                  </span>
+                </div>
+                <div class="term-actions">
+                  <button class="btn btn-tiny btn-term-ctrl" id="btn-scrolltop-vm1" onclick="scrollTerminalToTop('vm1')" title="Scroll to top of terminal">▲ Top</button>
+                  <button class="btn btn-tiny btn-term-ctrl" id="btn-scrollbottom-vm1" onclick="scrollTerminalToBottom('vm1')" title="Scroll to bottom of terminal">▼ End</button>
+                  <button class="btn btn-tiny btn-term-ctrl" id="btn-copy-vm1" onclick="copyTerminalSelection('vm1')" title="Copy selected text">Copy</button>
+                  <button class="btn btn-tiny btn-term-ctrl" id="btn-clear-vm1" onclick="clearTerminal('vm1')" title="Clear terminal screen">Clear</button>
+                  <button class="btn btn-tiny btn-term-ctrl btn-term-fullscreen" id="btn-fullscreen-vm1" onclick="toggleTerminalFullscreen('vm1')" title="Expand VM-1 terminal to fullscreen">⛶ Fullscreen</button>
+                  <button class="btn btn-tiny btn-term-ctrl" id="btn-reconnect-vm1" onclick="reconnectTerminal('vm1')" title="Reconnect WebSocket">Reconnect</button>
+                </div>
+              </div>
+              <div class="term-cmd-bar" id="vm1-cmd-bar">
+                <span class="cmd-icon">⚡</span>
+                <span class="cmd-prompt">ubuntu@vm1:~$</span>
+                <span class="cmd-text" id="vm1-cmd-text">ssh ubuntu@192.168.88.132 (ready)</span>
+              </div>
+              <div class="term-body">
+                <div class="real-xterm-wrapper">
+                  <div id="xterm-vm1" class="real-xterm-container"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- VM-2 PipeJack CI / Security Real Interactive Terminal -->
+            <div class="term-col term-vm2" id="col-term-vm2">
+              <div class="term-header">
+                <div class="term-title-wrap">
+                  <span class="term-tag tag-vm2">VM-2</span>
+                  <span class="term-role" title="PipeJack CI Daemon (192.168.88.133)">CI Daemon</span>
+                  <span class="term-stream-indicator" id="vm2-stream-indicator">
+                    <span class="dot-indicator"></span> <span class="indicator-text" id="vm2-status-text">Connected</span>
+                  </span>
+                </div>
+                <div class="term-actions">
+                  <button class="btn btn-tiny btn-term-ctrl" id="btn-scrolltop-vm2" onclick="scrollTerminalToTop('vm2')" title="Scroll to top of terminal">▲ Top</button>
+                  <button class="btn btn-tiny btn-term-ctrl" id="btn-scrollbottom-vm2" onclick="scrollTerminalToBottom('vm2')" title="Scroll to bottom of terminal">▼ End</button>
+                  <button class="btn btn-tiny btn-term-ctrl" id="btn-copy-vm2" onclick="copyTerminalSelection('vm2')" title="Copy selected text">Copy</button>
+                  <button class="btn btn-tiny btn-term-ctrl" id="btn-clear-vm2" onclick="clearTerminal('vm2')" title="Clear terminal screen">Clear</button>
+                  <button class="btn btn-tiny btn-term-ctrl btn-term-fullscreen" id="btn-fullscreen-vm2" onclick="toggleTerminalFullscreen('vm2')" title="Expand VM-2 terminal to fullscreen">⛶ Fullscreen</button>
+                  <button class="btn btn-tiny btn-term-ctrl" id="btn-reconnect-vm2" onclick="reconnectTerminal('vm2')" title="Reconnect WebSocket">Reconnect</button>
+                </div>
+              </div>
+              <div class="term-cmd-bar" id="vm2-cmd-bar">
+                <span class="cmd-icon">⚡</span>
+                <span class="cmd-prompt">ubuntu@vm2:~$</span>
+                <span class="cmd-text" id="vm2-cmd-text">pipejack-ci.service (listening :8888)</span>
+              </div>
+              <div class="term-body">
+                <div class="real-xterm-wrapper">
+                  <div id="xterm-vm2" class="real-xterm-container"></div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- ===================================================================
+             VIEW 2: BUILD OUTPUT (Primary Post-Build Result View)
+             =================================================================== -->
+        <div class="ws-view" id="view-output" style="display: none;">
+          
+          <!-- Idle State (when no build has executed yet) -->
+          <div class="build-idle-state" id="build-idle-state">
+            <div class="idle-message">
+              <h3>PipeJack Build Security Workspace</h3>
+              <p>Select any demonstration scenario from the left panel to execute real multi-sensor evaluation in the central workspace.</p>
+              <div class="idle-quick-actions">
+                <button class="btn btn-action" onclick="runScenario('clean-java')">Run Clean Java</button>
+                <button class="btn btn-action btn-hero" onclick="runScenario('malicious-java')">Run Malicious Java (Hero Demo)</button>
+                <button class="btn btn-subtle" onclick="runFullDemoSequence()">Run Full Sequence</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Active Build Result Content -->
+          <div class="build-result-content" id="build-result-content" style="display: none;">
+            
+            <!-- Verdict Header Row -->
+            <div class="verdict-header" id="verdict-header">
+              <div class="verdict-primary">
+                <span class="verdict-symbol" id="verdict-symbol">✓</span>
+                <div class="verdict-title-group">
+                  <span class="verdict-title" id="verdict-title">BUILD ALLOWED</span>
+                  <span class="verdict-desc" id="verdict-desc">All zero-trust security checks passed. Artifact approved for deployment.</span>
+                </div>
+              </div>
+              <div class="verdict-meta-badges">
+                <div class="meta-badge-group">
+                  <span class="badge-label">HTTP Status</span>
+                  <span class="badge-code" id="res-http-status">200</span>
+                </div>
+                <div class="meta-badge-group">
+                  <span class="badge-label">PipeJack Verdict</span>
+                  <span class="badge-code badge-verdict-code" id="res-verdict-code">ALLOW</span>
+                </div>
+                <div class="meta-badge-group">
+                  <span class="badge-label">Total Duration</span>
+                  <span class="badge-code" id="res-duration">0.0s</span>
+                </div>
+                <div class="meta-badge-group">
+                  <span class="badge-label">Policy Profile</span>
+                  <span class="badge-code mono" id="res-policy-profile">policy-banking.yaml</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Execution Pipeline Progress Stepper (6 Stages) -->
+            <div class="pipeline-stepper-panel">
+              <div class="stepper-header">
+                <strong>EXECUTION PIPELINE TELEMETRY</strong>
+                <span class="stepper-meta" id="stepper-meta-text">End-to-end multi-sensor lifecycle</span>
+              </div>
+              <div class="stepper-track" id="pipeline-stepper-track">
+                
+                <div class="step-node step-complete" id="step-node-upload">
+                  <div class="step-icon-circle"><span>1</span></div>
+                  <div class="step-label-group">
+                    <span class="step-title">Ingestion</span>
+                    <span class="step-sub" id="step-dur-upload">0.1s</span>
+                  </div>
+                </div>
+
+                <div class="step-connector active" id="step-conn-1"></div>
+
+                <div class="step-node step-complete" id="step-node-sandbox">
+                  <div class="step-icon-circle"><span>2</span></div>
+                  <div class="step-label-group">
+                    <span class="step-title">Cgroup Sandbox</span>
+                    <span class="step-sub" id="step-dur-sandbox">0.4s</span>
+                  </div>
+                </div>
+
+                <div class="step-connector active" id="step-conn-2"></div>
+
+                <div class="step-node step-complete" id="step-node-build">
+                  <div class="step-icon-circle"><span>3</span></div>
+                  <div class="step-label-group">
+                    <span class="step-title">Toolchain Build</span>
+                    <span class="step-sub" id="step-dur-build">Active</span>
+                  </div>
+                </div>
+
+                <div class="step-connector active" id="step-conn-3"></div>
+
+                <div class="step-node step-complete" id="step-node-sensors">
+                  <div class="step-icon-circle"><span>4</span></div>
+                  <div class="step-label-group">
+                    <span class="step-title">Multi-Sensor Scan</span>
+                    <span class="step-sub" id="step-dur-sensors">eBPF + Merkle</span>
+                  </div>
+                </div>
+
+                <div class="step-connector active" id="step-conn-4"></div>
+
+                <div class="step-node step-complete" id="step-node-pdp">
+                  <div class="step-icon-circle"><span>5</span></div>
+                  <div class="step-label-group">
+                    <span class="step-title">PDP Decision</span>
+                    <span class="step-sub" id="step-dur-pdp">Zero-Trust</span>
+                  </div>
+                </div>
+
+                <div class="step-connector active" id="step-conn-5"></div>
+
+                <div class="step-node step-complete" id="step-node-attest">
+                  <div class="step-icon-circle"><span>6</span></div>
+                  <div class="step-label-group">
+                    <span class="step-title">Attest &amp; Registry</span>
+                    <span class="step-sub" id="step-dur-attest">Ed25519</span>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+
+            <!-- Context Properties Grid -->
+            <div class="properties-grid">
+              <div class="prop-item">
+                <span class="prop-label">Project</span>
+                <strong class="prop-val" id="res-project">Banking API</strong>
+              </div>
+              <div class="prop-item">
+                <span class="prop-label">Build ID</span>
+                <div class="mono-chip-wrap">
+                  <code class="prop-val mono" id="res-build-id">1791042073</code>
+                  <button class="btn btn-tiny-icon" onclick="copyBuildId()" title="Copy Build ID">📋</button>
+                </div>
+              </div>
+              <div class="prop-item">
+                <span class="prop-label">Language / Toolchain</span>
+                <span class="prop-val" id="res-runtime">Java 17 (Maven)</span>
+              </div>
+              <div class="prop-item">
+                <span class="prop-label">Enforcement Action</span>
+                <span class="prop-val" id="res-action">Published and deployed to staging</span>
+              </div>
+              <div class="prop-item">
+                <span class="prop-label">Artifact Tag</span>
+                <code class="prop-val mono" id="res-artifact-image">localhost:5000/banking-api:1791042073</code>
+              </div>
+              <div class="prop-item">
+                <span class="prop-label">Attestation Status</span>
+                <span class="prop-val text-success" id="res-attest-status">✓ Ed25519 Signed &amp; Chained</span>
+              </div>
+            </div>
+
+            <!-- Tabbed Build Log & Telemetry Inspector -->
+            <div class="build-log-inspector-panel">
+              <div class="log-inspector-header">
+                <div class="log-tabs-nav">
+                  <button class="log-tab-btn active" id="log-tab-unified" onclick="switchLogTab('unified')">Unified Pipeline Log</button>
+                  <button class="log-tab-btn" id="log-tab-compiler" onclick="switchLogTab('compiler')">Compiler Output</button>
+                  <button class="log-tab-btn" id="log-tab-telemetry" onclick="switchLogTab('telemetry')">Security Telemetry</button>
+                  <button class="log-tab-btn" id="log-tab-manifest" onclick="switchLogTab('manifest')">Container Manifest</button>
+                </div>
+                <div class="log-actions">
+                  <input type="text" class="log-search-input" id="output-log-search" placeholder="Search log lines..." oninput="filterOutputLog(this.value)">
+                  <button class="btn btn-tiny btn-secondary" onclick="copyOutputLog()">Copy Log</button>
+                  <button class="btn btn-tiny btn-secondary" onclick="downloadOutputLog()">Download .log</button>
+                </div>
+              </div>
+              <div class="log-inspector-body">
+                <pre class="code-view log-view" id="res-output-log-pre">Loading build execution telemetry...</pre>
+              </div>
+            </div>
+
+            <!-- Deep-Dive Navigation Shortcuts -->
+            <div class="output-nav-shortcuts">
+              <button class="btn btn-secondary btn-sm" onclick="switchWorkspaceTab('security')">
+                <span>🛡 Inspect Security Findings &rarr;</span>
+              </button>
+              <button class="btn btn-secondary btn-sm" onclick="switchWorkspaceTab('attestation')">
+                <span>🔏 View Cryptographic Attestation &rarr;</span>
+              </button>
+              <button class="btn btn-secondary btn-sm" onclick="switchWorkspaceTab('comparison')">
+                <span>⚖ Compare Clean vs Compromised &rarr;</span>
+              </button>
+              <button class="btn btn-secondary btn-sm" onclick="switchWorkspaceTab('terminal')">
+                <span>⌘ View Interactive Terminals &rarr;</span>
+              </button>
+            </div>
+
+            <!-- Full Demo Completion Summary (Appears upon Full Demo finish) -->
+            <div class="full-demo-summary-box" id="full-demo-summary-box" style="display: none;">
+              <h3 class="summary-title">✓ FULL DEMONSTRATION SEQUENCE COMPLETE</h3>
+              <table class="data-table summary-table" id="full-demo-summary-table">
+                <thead>
+                  <tr>
+                    <th>Scenario</th>
+                    <th>Vector Tested</th>
+                    <th>HTTP</th>
+                    <th>Verdict</th>
+                    <th>Result State</th>
+                  </tr>
+                </thead>
+                <tbody id="full-demo-summary-tbody">
+                  <!-- Populated by JS -->
+                </tbody>
+              </table>
+            </div>
+
+          </div>
+
+        </div>
+
+        <!-- ===================================================================
+             VIEW 3: SECURITY EVIDENCE (Why was this build blocked?)
+             =================================================================== -->
+        <div class="ws-view" id="view-security" style="display: none;">
+          <div class="security-view-container">
+            
+            <div class="sec-header-bar">
+              <div class="sec-header-info">
+                <h3 class="sec-title">POLICY DECISION POINT (PDP) EVALUATION</h3>
+                <span class="sec-subtitle" id="sec-pdp-reason">Multi-sensor evaluation complete</span>
+              </div>
+              <div class="sec-verdict-badge" id="sec-verdict-pill">
+                <span id="sec-verdict-text">VERDICT: ALLOW</span>
+              </div>
+            </div>
+
+            <!-- Security Findings Warning Box (If any findings detected) -->
+            <div class="findings-box" id="findings-box" style="display: none;">
+              <div class="findings-header">
+                <strong>POLICY VIOLATIONS &amp; ANOMALIES DETECTED</strong>
+              </div>
+              <ul class="findings-list" id="findings-list">
+                <!-- Dynamically populated -->
+              </ul>
+            </div>
+
+            <!-- MITRE ATT&CK Matrix Mapping Card -->
+            <div class="mitre-matrix-card">
+              <div class="mitre-header">
+                <div class="mitre-title-group">
+                  <span class="mitre-badge">MITRE ATT&CK®</span>
+                  <strong>SUPPLY CHAIN ATTACK VECTOR COVERAGE</strong>
+                </div>
+                <span class="mitre-sub">Evaluated against real-time eBPF &amp; kernel telemetry</span>
+              </div>
+              <div class="table-responsive">
+                <table class="data-table mitre-table">
+                  <thead>
+                    <tr>
+                      <th>Technique ID</th>
+                      <th>Attack Category</th>
+                      <th>Tested Threat Vector</th>
+                      <th>Interception Mechanism</th>
+                      <th>Defense Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><code class="mono-badge">T1565.001</code></td>
+                      <td>Stored Data Manipulation</td>
+                      <td>Build-time backdoor injection into source tree</td>
+                      <td>Filesystem Merkle Baseline Differ</td>
+                      <td><span class="status-tag tag-clean">HARDENED</span></td>
+                    </tr>
+                    <tr>
+                      <td><code class="mono-badge">T1059.004</code></td>
+                      <td>Command &amp; Scripting Interpreter</td>
+                      <td>Unauthorized binary invocation (<code>/usr/bin/curl</code>, <code>sh -i</code>)</td>
+                      <td>eBPF Cgroup Process Tree Tracker</td>
+                      <td><span class="status-tag tag-clean">INTERCEPTED</span></td>
+                    </tr>
+                    <tr>
+                      <td><code class="mono-badge">T1071.001</code></td>
+                      <td>Web Protocols Exfiltration</td>
+                      <td>Rogue outbound network socket during build execution</td>
+                      <td>Kernel iptables Zero-Trust Egress Firewall</td>
+                      <td><span class="status-tag tag-clean">DROPPED</span></td>
+                    </tr>
+                    <tr>
+                      <td><code class="mono-badge">T1195.002</code></td>
+                      <td>Compromise Dependencies</td>
+                      <td>Postinstall hooks executing malicious payload</td>
+                      <td>Isolated Namespace Sandbox + IPC Guard</td>
+                      <td><span class="status-tag tag-clean">CONTAINED</span></td>
+                    </tr>
+                    <tr>
+                      <td><code class="mono-badge">T1204.002</code></td>
+                      <td>Malicious File Execution</td>
+                      <td>Compromised compiler wrapper or pipeline script</td>
+                      <td>Deterministic Pre/Post Hash Verification</td>
+                      <td><span class="status-tag tag-clean">BLOCKED</span></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- Four Sensor Detail Cards -->
+            <div class="sensor-cards-grid">
+              
+              <!-- 1. Process Tree Differ -->
+              <div class="sensor-card" id="card-sensor-proc">
+                <div class="sensor-card-header">
+                  <div class="sensor-card-title-group">
+                    <span class="sensor-icon">🔍</span>
+                    <strong>Process Tree Differ (proctree)</strong>
+                  </div>
+                  <span class="status-tag tag-clean" id="s-tag-proc">CLEAN</span>
+                </div>
+                <p class="sensor-summary-text" id="s-detail-proc">Allowlisted binaries: mvn, java, node, python</p>
+                <div class="sensor-drawer-toggle">
+                  <button class="btn btn-tiny" onclick="toggleDrawer('drawer-proc')">Process Tree Evidence</button>
+                </div>
+                <div class="sensor-drawer-content" id="drawer-proc" style="display: none;">
+                  <pre class="drawer-code" id="drawer-proc-code">Scanning container cgroup processes...</pre>
+                </div>
+              </div>
+
+              <!-- 2. Filesystem Baseline Checker -->
+              <div class="sensor-card" id="card-sensor-fs">
+                <div class="sensor-card-header">
+                  <div class="sensor-card-title-group">
+                    <span class="sensor-icon">📁</span>
+                    <strong>Filesystem Checker (fschecker)</strong>
+                  </div>
+                  <span class="status-tag tag-clean" id="s-tag-fs">CLEAN</span>
+                </div>
+                <p class="sensor-summary-text" id="s-detail-fs">Deterministic Pre/Post Merkle root hash verification</p>
+                <div class="sensor-drawer-toggle">
+                  <button class="btn btn-tiny" onclick="toggleDrawer('drawer-fs')">Merkle &amp; Filesystem Diff</button>
+                </div>
+                <div class="sensor-drawer-content" id="drawer-fs" style="display: none;">
+                  <div class="merkle-hashes">
+                    <div><span>Pre-Merkle:</span> <code id="sec-pre-merkle">--</code></div>
+                    <div><span>Post-Merkle:</span> <code id="sec-post-merkle">--</code></div>
+                  </div>
+                  <pre class="drawer-code" id="drawer-fs-code">Checking source tree modifications...</pre>
+                </div>
+              </div>
+
+              <!-- 3. Network Egress Firewall -->
+              <div class="sensor-card" id="card-sensor-net">
+                <div class="sensor-card-header">
+                  <div class="sensor-card-title-group">
+                    <span class="sensor-icon">🌐</span>
+                    <strong>Network Firewall (egressfw)</strong>
+                  </div>
+                  <span class="status-tag tag-clean" id="s-tag-net">CLEAN</span>
+                </div>
+                <p class="sensor-summary-text" id="s-detail-net">Active iptables firewall &amp; connection socket monitor</p>
+                <div class="sensor-drawer-toggle">
+                  <button class="btn btn-tiny" onclick="toggleDrawer('drawer-net')">Egress Firewall Evidence</button>
+                </div>
+                <div class="sensor-drawer-content" id="drawer-net" style="display: none;">
+                  <div class="net-metrics">
+                    <span>Packets Dropped: <strong id="sec-net-drops">0</strong></span>
+                    <span>Packets Accepted: <strong id="sec-net-accepts">0</strong></span>
+                  </div>
+                  <pre class="drawer-code" id="drawer-net-code">Inspecting egress socket attempts...</pre>
+                </div>
+              </div>
+
+              <!-- 4. Statistical Anomaly Engine -->
+              <div class="sensor-card" id="card-sensor-anom">
+                <div class="sensor-card-header">
+                  <div class="sensor-card-title-group">
+                    <span class="sensor-icon">📊</span>
+                    <strong>Statistical Anomaly Engine</strong>
+                  </div>
+                  <span class="status-tag tag-clean" id="s-tag-anom">CLEAN</span>
+                </div>
+                <p class="sensor-summary-text" id="s-detail-anom">Evaluation against rolling baseline metrics (advisory mode)</p>
+                <div class="sensor-drawer-toggle">
+                  <button class="btn btn-tiny" onclick="toggleDrawer('drawer-anom')">Statistical Deviations</button>
+                </div>
+                <div class="sensor-drawer-content" id="drawer-anom" style="display: none;">
+                  <pre class="drawer-code" id="drawer-anom-code">Rolling baseline comparison...</pre>
+                </div>
+              </div>
+
+              <!-- 5. Static Source Code Scanner (SAST) -->
+              <div class="sensor-card" id="card-sensor-sast">
+                <div class="sensor-card-header">
+                  <div class="sensor-card-title-group">
+                    <span class="sensor-icon">🔎</span>
+                    <strong>Static Code Analysis (SAST Engine)</strong>
+                  </div>
+                  <span class="status-tag tag-clean" id="s-tag-sast">CLEAN</span>
+                </div>
+                <p class="sensor-summary-text" id="s-detail-sast">Pre-build AST &amp; manifest scanning for CWE-78, secrets &amp; hooks</p>
+                <div class="sensor-drawer-toggle">
+                  <button class="btn btn-tiny" onclick="toggleDrawer('drawer-sast')">Static SAST Findings</button>
+                </div>
+                <div class="sensor-drawer-content" id="drawer-sast" style="display: none;">
+                  <pre class="drawer-code" id="drawer-sast-code">Scanning repository source files and build manifests...</pre>
+                </div>
+              </div>
+
+            </div>
+
+            <!-- Quarantine Enforcement Management Block -->
+            <div class="quarantine-status-panel" id="quarantine-panel">
+              <div class="q-header">
+                <strong>ARTIFACT &amp; QUARANTINE ENFORCEMENT</strong>
+                <span class="q-badge" id="q-status-badge">DEPLOYED</span>
+              </div>
+              <div class="q-body">
+                <div class="q-row"><span>Security Decision:</span> <strong id="q-decision-text">ALLOW</strong></div>
+                <div class="q-row"><span>Quarantine Result:</span> <span id="q-result-text">Not applicable (clean build)</span></div>
+                <div class="q-row"><span>Registry Image:</span> <code id="q-image-text">localhost:5000/...</code></div>
+                <div class="q-row"><span>Production Deployment:</span> <span id="q-deploy-text">Allowed &amp; Deployed</span></div>
+              </div>
+            </div>
+
+            <!-- Zero-Trust Remediation Block -->
+            <div class="remediation-panel" id="remediation-panel">
+              <div class="remediation-header">
+                <span class="remediation-icon">🛡</span>
+                <strong>ZERO-TRUST REMEDIATION &amp; HARDENING GUIDELINES</strong>
+              </div>
+              <div class="remediation-body" id="remediation-body">
+                <p id="remediation-desc">When policy violations are detected, PipeJack quarantines the artifact and halts all deployment webhooks. Developers should remove unallowlisted binaries, verify dependency checksums against official package registries, and restrict build-time network access.</p>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- ===================================================================
+             VIEW 4: ATTESTATION (Cryptographic Chain & Verification)
+             =================================================================== -->
+        <div class="ws-view" id="view-attestation" style="display: none;">
+          <div class="attestation-view-container">
+            
+            <!-- SLSA Level 3+ Compliance Banner -->
+            <div class="slsa-compliance-banner">
+              <div class="slsa-badge-wrap">
+                <span class="slsa-pill">SLSA LEVEL 3+</span>
+                <strong>SUPPLY CHAIN INTEGRITY ATTESTED</strong>
+              </div>
+              <div class="slsa-meta-chips">
+                <span class="chip-slsa">✓ Hermetic Environment</span>
+                <span class="chip-slsa">✓ Non-Falsifiable Provenance</span>
+                <span class="chip-slsa">✓ Ed25519 Signed</span>
+                <span class="chip-slsa">✓ Merkle Root Chained</span>
+              </div>
+            </div>
+
+            <!-- Cryptographic Audit Status Block -->
+            <div class="audit-summary-block" id="audit-summary-block">
+              <div class="audit-status" id="audit-status-text">✓ Cryptographic Audit Passed</div>
+              <p class="audit-sub" id="audit-sub-text">All historical Ed25519 signatures, Merkle self-hashes, and chain linkages verified.</p>
+            </div>
+
+            <!-- Structured Cryptographic Checklist Card -->
+            <div class="audit-checklist-card">
+              <div class="audit-check-item">
+                <span class="check-icon check-pass" id="chk-self-hash">✓</span>
+                <div class="check-info">
+                  <span class="check-title">Self-Hash Integrity (SHA-256)</span>
+                  <span class="check-desc">Recomputed canonical Merkle self-hash matches record metadata</span>
+                </div>
+                <span class="badge-status-valid" id="chk-self-hash-badge">Valid</span>
+              </div>
+
+              <div class="audit-check-item">
+                <span class="check-icon check-pass" id="chk-signature">✓</span>
+                <div class="check-info">
+                  <span class="check-title">Ed25519 Digital Signature</span>
+                  <span class="check-desc">Cryptographic signature verified against CI daemon authority pubkey</span>
+                </div>
+                <span class="badge-status-valid" id="chk-signature-badge">Valid</span>
+              </div>
+
+              <div class="audit-check-item">
+                <span class="check-icon check-pass" id="chk-chain-link">✓</span>
+                <div class="check-info">
+                  <span class="check-title">Previous-Hash Chain Link</span>
+                  <span class="check-desc">Strict temporal cryptographic linkage to antecedent build block</span>
+                </div>
+                <span class="badge-status-valid" id="chk-chain-link-badge">Valid</span>
+              </div>
+
+              <div class="audit-check-item">
+                <span class="check-icon check-pass" id="chk-ledger-state">✓</span>
+                <div class="check-info">
+                  <span class="check-title">Overall Ledger State</span>
+                  <span class="check-desc" id="chk-ledger-summary">Verified records: checking...</span>
+                </div>
+                <span class="badge-status-valid" id="chk-chain-badge">CHAIN INTACT</span>
+              </div>
+            </div>
+
+            <!-- Visual Blockchain Explorer -->
+            <div class="blockchain-explorer-card">
+              <div class="bc-header">
+                <strong>TAMPER-PROOF LEDGER HASH CHAIN EXPLORER</strong>
+                <span class="bc-sub">Immutable sequential block commitments</span>
+              </div>
+              <div class="bc-chain-strip">
+                <div class="bc-block bc-block-prev">
+                  <div class="bc-block-tag">Block #N-1</div>
+                  <div class="bc-block-hash" id="bc-hash-prev">621baaf4...</div>
+                  <span class="bc-status-tag">Chained</span>
+                </div>
+                <div class="bc-link-arrow">&rarr;</div>
+                <div class="bc-block bc-block-curr">
+                  <div class="bc-block-tag">Block #N (Current)</div>
+                  <div class="bc-block-hash" id="bc-hash-curr">7f0bb477...</div>
+                  <span class="bc-status-tag active">Verified</span>
+                </div>
+                <div class="bc-link-arrow">&rarr;</div>
+                <div class="bc-block bc-block-next">
+                  <div class="bc-block-tag">Block #N+1</div>
+                  <div class="bc-block-hash" id="bc-hash-next">Pending...</div>
+                  <span class="bc-status-tag pending">Ready</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Collapsible Verification Details Stream -->
+            <div class="audit-details-section">
+              <div class="details-toggle-bar">
+                <button class="btn btn-secondary btn-sm" id="btn-toggle-verify-details" onclick="toggleVerifyDetails()">
+                  <span id="toggle-details-text">View Verification Log</span>
+                </button>
+                <button class="btn btn-action btn-sm" onclick="triggerAttestationAudit()">
+                  <span>⚡ Run Real-Time Cryptographic Audit</span>
+                </button>
+                <span class="details-hint" id="details-count-hint">Click to inspect per-record verification stream</span>
+              </div>
+              <div class="modal-log-wrap" id="verify-details-wrap" style="display: none; margin-top: 12px;">
+                <pre class="code-view" id="verify-raw-log">Running cryptographic verification...</pre>
+              </div>
+            </div>
+
+            <!-- Current Build Raw Attestation Block -->
+            <div class="current-attest-block">
+              <div class="cab-header">
+                <strong>CURRENT BUILD ATTESTATION RECORD (in-toto / SLSA Format)</strong>
+                <div class="cab-actions">
+                  <button class="btn btn-tiny btn-copy" id="btn-copy-attest" onclick="copyAttestRecord()">Copy JSON</button>
+                  <button class="btn btn-tiny btn-secondary" onclick="downloadAttestRecord()">Download .json</button>
+                  <button class="btn btn-tiny btn-secondary" onclick="downloadSlsaBundle()">Download in-toto Bundle</button>
+                </div>
+              </div>
+              <div class="cab-meta-table">
+                <div><span>Self Hash:</span> <code class="mono" id="attest-self-hash">--</code></div>
+                <div><span>Previous Hash:</span> <code class="mono" id="attest-prev-hash">--</code></div>
+                <div><span>Signature:</span> <code class="mono" id="attest-signature">--</code></div>
+              </div>
+              <pre class="code-view json-view" id="attest-json-view">No attestation loaded.</pre>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- ===================================================================
+             VIEW 5: COMPARISON (Clean vs Malicious)
+             =================================================================== -->
+        <div class="ws-view" id="view-comparison" style="display: none;">
+          <div class="comparison-view-container">
+            <div class="comp-header">
+              <div class="comp-header-left">
+                <h3>SECURITY ENFORCEMENT &amp; PLATFORM COMPARISON</h3>
+                <p>Comprehensive contrast across languages, vectors, and traditional CI vs PipeJack Zero-Trust CI.</p>
+              </div>
+              <div class="comp-view-toggle">
+                <button class="comp-tab-btn active" id="comp-btn-proctree" onclick="switchComparisonView('proctree')">🌳 Multi-Image Process Tree Differ</button>
+                <button class="comp-tab-btn" id="comp-btn-docker" onclick="switchComparisonView('docker')">🐳 Multi-Image Docker Execution</button>
+                <button class="comp-tab-btn" id="comp-btn-scenarios" onclick="switchComparisonView('scenarios')">⚖️ Scenario Diff Matrix</button>
+                <button class="comp-tab-btn" id="comp-btn-traditional" onclick="switchComparisonView('traditional')">⚔️ Traditional CI vs PipeJack</button>
+              </div>
+            </div>
+
+            <!-- View 1: Multi-Image Process Tree Differ & Filesystem Baseline -->
+            <div class="comp-subview" id="comp-subview-proctree">
+              <div class="proctree-control-bar">
+                <div class="proctree-picker-label">
+                  <span class="proctree-picker-title">SELECT DOCKER IMAGE &amp; WORKLOAD:</span>
+                  <span class="proctree-picker-desc">Compare execution tree traces against zero-trust policy allowlists across multi-runtime Docker environments</span>
+                </div>
+                <div class="proctree-image-chips">
+                  <button class="proctree-chip active" id="proctree-chip-java" onclick="selectProctreeImage('java')">
+                    <span class="chip-icon">☕</span>
+                    <span class="chip-name">Java 17 / Maven</span>
+                    <span class="chip-tag">maven:3.8</span>
+                  </button>
+                  <button class="proctree-chip" id="proctree-chip-node" onclick="selectProctreeImage('node')">
+                    <span class="chip-icon">🟢</span>
+                    <span class="chip-name">Node.js 18 / npm</span>
+                    <span class="chip-tag">node:18</span>
+                  </button>
+                  <button class="proctree-chip" id="proctree-chip-python" onclick="selectProctreeImage('python')">
+                    <span class="chip-icon">🐍</span>
+                    <span class="chip-name">Python 3.12 / Wheel</span>
+                    <span class="chip-tag">python:3.12</span>
+                  </button>
+                  <button class="proctree-chip" id="proctree-chip-go" onclick="selectProctreeImage('go')">
+                    <span class="chip-icon">🔷</span>
+                    <span class="chip-name">Go 1.22 / Toolchain</span>
+                    <span class="chip-tag">golang:1.22</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Metadata Summary Card -->
+              <div class="proctree-summary-grid">
+                <div class="proctree-meta-card">
+                  <div class="meta-label">DOCKER CONTAINER IMAGE</div>
+                  <div class="meta-value-mono" id="proctree-meta-image">maven:3.8-eclipse-temurin-17</div>
+                  <div class="meta-sub" id="proctree-meta-digest">sha256:40fcff4c...</div>
+                </div>
+                <div class="proctree-meta-card">
+                  <div class="meta-label">SECURITY POLICY SPEC</div>
+                  <div class="meta-value-highlight" id="proctree-meta-policy">policy-banking.yaml</div>
+                  <div class="meta-sub" id="proctree-meta-isolation">Linux cgroup v2 + eBPF sys_enter_execve</div>
+                </div>
+                <div class="proctree-meta-card">
+                  <div class="meta-label">ALLOWLISTED PROCESSES</div>
+                  <div class="meta-value-count" id="proctree-meta-allowcount">10 Binaries Permitted</div>
+                  <div class="meta-sub" id="proctree-meta-blocked">Blocked: /usr/bin/curl, /usr/bin/wget</div>
+                </div>
+                <div class="proctree-meta-card">
+                  <div class="meta-label">TREE DIVERGENCE SCORE</div>
+                  <div class="meta-value-divergence" id="proctree-meta-divergence">
+                    <span class="div-clean">0.0% Clean</span> | <span class="div-mal">+20.0% Malicious</span>
+                  </div>
+                  <div class="meta-sub" id="proctree-meta-verdict">eBPF Interception: EPERM / SIGKILL</div>
+                </div>
+              </div>
+
+              <!-- 3-Column Process Tree Differ Visualization -->
+              <div class="proctree-trees-grid">
+                <!-- Column 1: Policy Baseline Tree -->
+                <div class="proctree-column card">
+                  <div class="proctree-column-header baseline-header">
+                    <div class="col-title">
+                      <span class="col-icon">📋</span>
+                      <strong>POLICY BASELINE SPEC</strong>
+                    </div>
+                    <span class="badge-status-valid">STATIC ALLOWLIST</span>
+                  </div>
+                  <div class="proctree-column-desc">
+                    Permitted execution tree strictly defined in zero-trust workload profile.
+                  </div>
+                  <div class="proctree-nodes-container" id="proctree-nodes-baseline">
+                    <!-- Populated dynamically -->
+                  </div>
+                </div>
+
+                <!-- Column 2: Clean Runtime Tree -->
+                <div class="proctree-column card">
+                  <div class="proctree-column-header clean-header">
+                    <div class="col-title">
+                      <span class="col-icon">✅</span>
+                      <strong>CLEAN RUNTIME TRACE</strong>
+                    </div>
+                    <span class="status-tag tag-clean">0 VIOLATIONS</span>
+                  </div>
+                  <div class="proctree-column-desc">
+                    Actual runtime processes intercepted by eBPF probe during clean build.
+                  </div>
+                  <div class="proctree-nodes-container" id="proctree-nodes-clean">
+                    <!-- Populated dynamically -->
+                  </div>
+                </div>
+
+                <!-- Column 3: Malicious Runtime Tree with Rogue Spawn -->
+                <div class="proctree-column card">
+                  <div class="proctree-column-header mal-header">
+                    <div class="col-title">
+                      <span class="col-icon">🚨</span>
+                      <strong>MALICIOUS RUNTIME ATTACK TRACE</strong>
+                    </div>
+                    <span class="status-tag tag-detected">ROGUE SPAWN BLOCKED</span>
+                  </div>
+                  <div class="proctree-column-desc">
+                    Intercepted attack tree showing rogue subprocess branch caught by eBPF.
+                  </div>
+                  <div class="proctree-nodes-container" id="proctree-nodes-malicious">
+                    <!-- Populated dynamically -->
+                  </div>
+                </div>
+              </div>
+
+              <!-- Filesystem Merkle Baseline Comparator -->
+              <div class="proctree-fs-baseline card mt-3">
+                <div class="fs-baseline-header">
+                  <div class="fs-title-box">
+                    <span class="fs-icon">📂</span>
+                    <div>
+                      <h4 class="fs-title">FILESYSTEM MERKLE BASELINE COMPARATOR</h4>
+                      <p class="fs-subtitle">Cryptographic SHA-256 Merkle tree verification of source repository and build workspace</p>
+                    </div>
+                  </div>
+                  <div class="fs-roots-bar">
+                    <div class="fs-root-box">
+                      <span class="root-lbl">PRE-BUILD MERKLE ROOT:</span>
+                      <code class="root-val" id="fs-pre-merkle">79ec9163b01e7ea0d16...</code>
+                    </div>
+                    <div class="fs-root-box">
+                      <span class="root-lbl">POST-BUILD (CLEAN):</span>
+                      <code class="root-val val-match" id="fs-post-clean">79ec9163b01e7ea0d16... (IDENTICAL)</code>
+                    </div>
+                    <div class="fs-root-box">
+                      <span class="root-lbl">POST-BUILD (TAMPERED):</span>
+                      <code class="root-val val-diff" id="fs-post-mal">79606d9dddd48ff7e08... (DIVERGED)</code>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="fs-diff-table-container">
+                  <table class="data-table">
+                    <thead>
+                      <tr>
+                        <th style="width: 35%;">Workspace File Path</th>
+                        <th style="width: 15%;">Mutation Type</th>
+                        <th style="width: 25%;">SHA-256 Checksum</th>
+                        <th style="width: 25%;">Integrity Status &amp; Policy Action</th>
+                      </tr>
+                    </thead>
+                    <tbody id="fs-diff-tbody">
+                      <!-- Populated dynamically -->
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <!-- View 2: Multi-Image Docker Execution & Isolation Monitor -->
+            <div class="comp-subview" id="comp-subview-docker" style="display: none;">
+              <div class="docker-monitor-header-bar">
+                <div class="docker-monitor-title">
+                  <span class="docker-icon">🐳</span>
+                  <div>
+                    <h4>DOCKER MULTI-IMAGE EXECUTION &amp; ISOLATION MONITOR</h4>
+                    <p>Live inventory of OCI container images executed with Linux cgroup v2, shared PID/network namespaces, and eBPF sidecar containment</p>
+                  </div>
+                </div>
+                <div class="docker-telemetry-badge">
+                  <span class="dot-online"></span>
+                  <span>ENGINE: Docker 28.2.2 (cgroupfs v2)</span>
+                  <span class="badge-isolation">ISOLATION: Zero-Trust Strict</span>
+                </div>
+              </div>
+
+              <!-- Multi-Image Inventory Grid -->
+              <div class="docker-images-grid" id="docker-images-grid">
+                <!-- Populated dynamically -->
+              </div>
+
+              <!-- Active & Recent Container Executions -->
+              <div class="card mt-3">
+                <div class="card-header-styled">
+                  <h5>CONTAINER EXECUTION INSTANCES &amp; NAMESPACE MAPPINGS</h5>
+                  <button class="btn btn-tiny btn-action" onclick="refreshDockerStatus()"><i class="fas fa-sync-alt"></i> Refresh Docker Telemetry</button>
+                </div>
+                <div class="table-responsive">
+                  <table class="data-table" id="docker-containers-table">
+                    <thead>
+                      <tr>
+                        <th>Container ID</th>
+                        <th>Docker Image</th>
+                        <th>Container Name</th>
+                        <th>Namespace Isolation</th>
+                        <th>Cgroup Scope</th>
+                        <th>eBPF Sidecar Probe</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody id="docker-containers-tbody">
+                      <!-- Populated dynamically -->
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <!-- Architecture Explainer -->
+              <div class="docker-arch-card card mt-3">
+                <h5>Multi-Image Container Isolation Architecture</h5>
+                <div class="docker-arch-content">
+                  <div class="docker-arch-step">
+                    <span class="step-num">1</span>
+                    <strong>Image-Agnostic Build Dispatch</strong>
+                    <p>Custom CI dynamically routes workloads to appropriate base images (<code>maven</code>, <code>node</code>, <code>python</code>, <code>golang</code>) based on project manifest detection.</p>
+                  </div>
+                  <div class="docker-arch-step">
+                    <span class="step-num">2</span>
+                    <strong>Cryptographic Namespace Linkage</strong>
+                    <p>The PipeJack eBPF sidecar is linked via <code>--pid=container:&lt;id&gt;</code> and <code>--network=container:&lt;id&gt;</code>, gaining kernel visibility into every fork and execve inside the guest.</p>
+                  </div>
+                  <div class="docker-arch-step">
+                    <span class="step-num">3</span>
+                    <strong>Zero-Trust Tree Differ &amp; Cgroup Containment</strong>
+                    <p>Every process spawned is intercepted in kernel space (<code>sys_enter_execve</code>) and diffed against the image's policy allowlist in &lt;1.2 milliseconds.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- View 3: Scenario Comparison Matrix -->
+            <div class="comp-subview" id="comp-subview-scenarios" style="display: none;">
+              
+              <!-- Language Scenario Picker -->
+              <div class="comp-scenario-selector-bar">
+                <label>Select Comparison Scenario:</label>
+                <div class="comp-preset-buttons">
+                  <button class="btn btn-tiny btn-comp-preset active" onclick="loadComparisonPreset('java')">Java (Banking API)</button>
+                  <button class="btn btn-tiny btn-comp-preset" onclick="loadComparisonPreset('node')">Node.js (Payment Service)</button>
+                  <button class="btn btn-tiny btn-comp-preset" onclick="loadComparisonPreset('python')">Python (Calculator API)</button>
+                </div>
+              </div>
+
+              <div class="table-responsive">
+                <table class="data-table comp-table" id="comp-table">
+                  <thead>
+                    <tr>
+                      <th style="width: 20%;">Security Dimension</th>
+                      <th style="width: 40%;" id="comp-th-clean">Clean Build (Legitimate Banking API)</th>
+                      <th style="width: 40%;" id="comp-th-mal">Malicious Build (Hero Multi-Vector Demo)</th>
+                    </tr>
+                  </thead>
+                  <tbody id="comp-tbody">
+                    <tr>
+                      <td><strong>Process Scanner (proctree)</strong></td>
+                      <td><span class="status-tag tag-clean">CLEAN</span> Allowlisted binaries: <code>mvn</code>, <code>java</code></td>
+                      <td><span class="status-tag tag-detected">DETECTED</span> Unauthorized executable invoked: <code>/usr/bin/curl</code></td>
+                    </tr>
+                    <tr>
+                      <td><strong>Filesystem Checker (fschecker)</strong></td>
+                      <td><span class="status-tag tag-clean">MATCH</span> Pre/Post Merkle root identical</td>
+                      <td><span class="status-tag tag-detected">CHANGED</span> Source tree tampered: added <code>backdoor.txt</code></td>
+                    </tr>
+                    <tr>
+                      <td><strong>Network Firewall (egressfw)</strong></td>
+                      <td><span class="status-tag tag-clean">CLEAN</span> 0 dropped packets, egress within allowlist</td>
+                      <td><span class="status-tag tag-detected">VIOLATION</span> Unauthorized socket to <code>10.255.255.1:80</code> dropped</td>
+                    </tr>
+                    <tr>
+                      <td><strong>Policy Decision (PDP)</strong></td>
+                      <td><span class="badge-status-valid">ALLOW</span> Zero violations detected</td>
+                      <td><span class="badge-status-invalid">BLOCK</span> Multi-sensor compromise detected</td>
+                    </tr>
+                    <tr>
+                      <td><strong>Artifact Management</strong></td>
+                      <td><strong>Published &amp; Deployed</strong> (<code>localhost:5000/...</code>)</td>
+                      <td><strong>Quarantined &amp; Prevented</strong> (<code>-quarantine</code> tag)</td>
+                    </tr>
+                    <tr>
+                      <td><strong>Cryptographic Attestation</strong></td>
+                      <td>Signed Ed25519 record chained with <code>verdict=ALLOW</code></td>
+                      <td>Signed Ed25519 record chained with <code>verdict=BLOCK</code></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- View B: Traditional CI vs PipeJack Matrix -->
+            <div class="comp-subview" id="comp-subview-traditional" style="display: none;">
+              <div class="table-responsive">
+                <table class="data-table comp-table comp-traditional-table">
+                  <thead>
+                    <tr>
+                      <th style="width: 25%;">Supply Chain Attack Vector</th>
+                      <th style="width: 37%;">Traditional CI/CD (Jenkins / GHA / GitLab)</th>
+                      <th style="width: 38%;">PipeJack Zero-Trust Hardened CI</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><strong>Build-Time Source Tampering</strong></td>
+                      <td><span class="status-tag tag-detected">UNDETECTED</span> Build runner blindly compiles modified source files without integrity tracking.</td>
+                      <td><span class="status-tag tag-clean">BLOCKED</span> Deterministic Pre/Post Merkle root comparison flags and halts tampered files.</td>
+                    </tr>
+                    <tr>
+                      <td><strong>Unauthorized Subprocess Execution</strong></td>
+                      <td><span class="status-tag tag-detected">ALLOWED</span> Arbitrary binaries (curl, nc, python) can execute from build scripts unmonitored.</td>
+                      <td><span class="status-tag tag-clean">INTERCEPTED</span> eBPF kernel cgroup process tree differ intercepts and terminates unallowlisted binaries.</td>
+                    </tr>
+                    <tr>
+                      <td><strong>Rogue Network Exfiltration</strong></td>
+                      <td><span class="status-tag tag-detected">ALLOWED</span> Unrestricted outbound internet egress allows credential exfiltration to attacker C2.</td>
+                      <td><span class="status-tag tag-clean">DROPPED</span> Active iptables firewall enforces strict zero-trust CIDR socket allowlists per container.</td>
+                    </tr>
+                    <tr>
+                      <td><strong>Build-Time Pipe Tampering</strong></td>
+                      <td><span class="status-tag tag-detected">VULNERABLE</span> Shared runners allow inter-process pipe hijacking between compiler and linker.</td>
+                      <td><span class="status-tag tag-clean">HARDENED</span> Cryptographic namespace isolation, cgroup containment, and runtime verification.</td>
+                    </tr>
+                    <tr>
+                      <td><strong>Poisoned Container Registries</strong></td>
+                      <td><span class="status-tag tag-detected">POISONED</span> Compromised builds push malicious container tags directly to production registries.</td>
+                      <td><span class="status-tag tag-clean">QUARANTINED</span> Image tagged with <code>-quarantine</code>; deployment webhooks immediately revoked.</td>
+                    </tr>
+                    <tr>
+                      <td><strong>Chain of Custody Provenance</strong></td>
+                      <td><span class="status-tag tag-detected">OPTIONAL / POST-HOC</span> Post-build signing lacks runtime telemetry or execution guarantees.</td>
+                      <td><span class="status-tag tag-clean">NON-FALSIFIABLE</span> Hardware-rooted Ed25519 signature chained to preceding build Merkle root hash.</td>
+                    </tr>
+                    <tr>
+                      <td><strong>Performance Overhead</strong></td>
+                      <td>0% (Zero runtime defense or monitoring)</td>
+                      <td><span class="status-tag tag-clean">&lt; 2.8% OVERHEAD</span> Sub-millisecond kernel eBPF probes with negligible pipeline latency.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+
+        <!-- ===================================================================
+             VIEW 6: APPLICATION PLAYGROUND & LIVE VERIFICATION
+             =================================================================== -->
+        <div class="ws-view" id="view-playground" style="display: none;">
+          <div class="playground-view-container">
+
+            <div class="playground-header-bar">
+              <div class="playground-header-info">
+                <h3 class="playground-title">APPLICATION PLAYGROUND &amp; LIVE EXECUTION</h3>
+                <span class="playground-subtitle">Direct verification of published artifacts with ACID integrity guarantees</span>
+              </div>
+              <div class="playground-status-pill" id="pg-status-pill">
+                <span id="pg-status-text">STATUS: ACTIVE &amp; VERIFIED</span>
+              </div>
+            </div>
+
+            <!-- Zero-Trust Lockdown Notice (shown when build is BLOCKED) -->
+            <div class="playground-lockdown-box" id="pg-lockdown-box" style="display: none;">
+              <div class="lockdown-icon">🚫</div>
+              <div class="lockdown-content">
+                <h4>ZERO-TRUST DEPLOYMENT HALTED (POLICY ENFORCED)</h4>
+                <p id="pg-lockdown-msg">Build was blocked and quarantined due to multi-sensor security violations. Ingress routing to <code>localhost:5000/...</code> was terminated by the PipeJack Policy Decision Point (PDP). The application container is locked and denied execution in production.</p>
+                <div class="lockdown-actions">
+                  <button class="btn btn-danger btn-sm" onclick="probeBlockedService()">Probe Production Port (:8080)</button>
+                  <span class="lockdown-probe-result" id="pg-probe-result"></span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Active Playground Content (shown when build is ALLOW) -->
+            <div class="playground-active-content" id="pg-active-content">
+
+              <!-- App Switcher Nav -->
+              <div class="app-switcher-nav">
+                <button class="app-tab-btn active" id="app-btn-banking" onclick="switchPlaygroundApp('banking')">
+                  🏦 Banking API (Java 17 - ACID Enforced)
+                </button>
+                <button class="app-tab-btn" id="app-btn-calc" onclick="switchPlaygroundApp('calc')">
+                  🧮 Calculator API (Python 3.12 - Safe AST Evaluator)
+                </button>
+                <button class="app-tab-btn" id="app-btn-node" onclick="switchPlaygroundApp('node')">
+                  💳 Payment Gateway (Node.js 18)
+                </button>
+              </div>
+
+              <!-- SUB-VIEW 1: BANKING API (ACID Enforced) -->
+              <div class="playground-subview" id="pg-subview-banking">
+                <!-- Microservices Inventory Strip -->
+                <div class="pg-ms-strip">
+                  <span class="pg-ms-title">RUNNING MICROSERVICES:</span>
+                  <span class="pg-ms-badge badge-status-valid">banking-balance-service (:8081)</span>
+                  <span class="pg-ms-badge badge-status-valid">banking-transfer-service (:8082)</span>
+                  <span class="pg-ms-badge badge-status-valid">banking-auth-service (:8083)</span>
+                  <span class="pg-ms-badge badge-status-valid">banking-ledger-aggregate (:8084)</span>
+                </div>
+
+                <!-- Account Balance Cards -->
+                <div class="accounts-overview-grid" id="accounts-overview-grid">
+                  <div class="account-card" id="card-acc-1001">
+                    <div class="acc-header">
+                      <span class="acc-id">ACC-1001</span>
+                      <span class="acc-status-tag">ACTIVE</span>
+                    </div>
+                    <div class="acc-owner">Alice Vance (Checking)</div>
+                    <div class="acc-balance" id="acc-bal-1001">$11,950.00</div>
+                    <span class="acc-curr">USD • Verified Container Registry</span>
+                  </div>
+
+                  <div class="account-card" id="card-acc-1002">
+                    <div class="acc-header">
+                      <span class="acc-id">ACC-1002</span>
+                      <span class="acc-status-tag">ACTIVE</span>
+                    </div>
+                    <div class="acc-owner">Bob Sterling (Savings)</div>
+                    <div class="acc-balance" id="acc-bal-1002">$9,420.50</div>
+                    <span class="acc-curr">USD • Verified Container Registry</span>
+                  </div>
+
+                  <div class="account-card" id="card-acc-1003">
+                    <div class="acc-header">
+                      <span class="acc-id">ACC-1003</span>
+                      <span class="acc-status-tag">ACTIVE</span>
+                    </div>
+                    <div class="acc-owner">Corporate Treasury (Reserve)</div>
+                    <div class="acc-balance" id="acc-bal-1003">$75,000.00</div>
+                    <span class="acc-curr">USD • Verified Container Registry</span>
+                  </div>
+                </div>
+
+                <!-- Interactive Fund Transfer Form & Ledger -->
+                <div class="banking-actions-layout">
+                  <div class="transfer-form-card">
+                    <h4>⚡ Execute ACID Fund Transfer</h4>
+                    <div class="form-row">
+                      <label>From Account:</label>
+                      <select class="form-input" id="transfer-from">
+                        <option value="ACC-1001">ACC-1001 (Alice Vance)</option>
+                        <option value="ACC-1002">ACC-1002 (Bob Sterling)</option>
+                        <option value="ACC-1003">ACC-1003 (Corporate Treasury)</option>
+                      </select>
+                    </div>
+                    <div class="form-row">
+                      <label>To Account:</label>
+                      <select class="form-input" id="transfer-to">
+                        <option value="ACC-1002">ACC-1002 (Bob Sterling)</option>
+                        <option value="ACC-1001">ACC-1001 (Alice Vance)</option>
+                        <option value="ACC-1003">ACC-1003 (Corporate Treasury)</option>
+                      </select>
+                    </div>
+                    <div class="form-row">
+                      <label>Transfer Amount ($):</label>
+                      <input type="number" class="form-input" id="transfer-amount" value="500.00" min="1" step="0.01">
+                    </div>
+                    <div class="form-row">
+                      <label>Transaction Memo / Audit Note:</label>
+                      <input type="text" class="form-input" id="transfer-memo" value="Vendor Staging Settlement #501">
+                    </div>
+                    <div class="form-actions-row">
+                      <button class="btn btn-action" id="btn-execute-transfer" onclick="executePlaygroundTransfer()">Commit ACID Transaction</button>
+                      <button class="btn btn-secondary" onclick="resetBankingLedger()">Reset Ledger</button>
+                    </div>
+                    <div class="transfer-feedback" id="transfer-feedback" style="display: none;"></div>
+                  </div>
+
+                  <div class="ledger-preview-card">
+                    <div class="ledger-header">
+                      <h4>📜 Cryptographic Transaction Ledger</h4>
+                      <span class="ledger-count" id="ledger-count">2 Entries</span>
+                    </div>
+                    <div class="table-responsive ledger-table-wrap">
+                      <table class="data-table" id="banking-ledger-table">
+                        <thead>
+                          <tr>
+                            <th>TXID</th>
+                            <th>Timestamp</th>
+                            <th>From &rarr; To</th>
+                            <th>Amount</th>
+                            <th>Status</th>
+                            <th>Ledger Block Hash</th>
+                          </tr>
+                        </thead>
+                        <tbody id="banking-ledger-tbody">
+                          <!-- Dynamically populated -->
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+
+              <!-- SUB-VIEW 2: CALCULATOR API (Safe AST) -->
+              <div class="playground-subview" id="pg-subview-calc" style="display: none;">
+                <!-- Microservices Inventory Strip -->
+                <div class="pg-ms-strip">
+                  <span class="pg-ms-title">RUNNING MICROSERVICES:</span>
+                  <span class="pg-ms-badge badge-status-valid">calculator-core (:8085)</span>
+                  <span class="pg-ms-badge badge-status-valid">calculator-scientific-ast (:8086)</span>
+                </div>
+
+                <div class="calc-card">
+                  <h4>🧮 Scientific &amp; Financial Expression Evaluator</h4>
+                  <p class="calc-sub">Evaluates complex financial, trigonometric, and arithmetic expressions inside an AST-sanitized runtime sandbox with zero code-injection surface.</p>
+                  
+                  <div class="calc-presets-bar">
+                    <span class="preset-label">Quick Presets:</span>
+                    <button class="btn btn-tiny btn-preset" onclick="setCalcExpr('(1000 * (1 + 0.05 / 12) ^ (12 * 5))')">Compound Interest ($1k, 5yr @ 5%)</button>
+                    <button class="btn btn-tiny btn-preset" onclick="setCalcExpr('sqrt(3^2 + 4^2)')">Euclidean Norm</button>
+                    <button class="btn btn-tiny btn-preset" onclick="setCalcExpr('pi * 15^2')">Circle Area (r=15)</button>
+                    <button class="btn btn-tiny btn-preset" onclick="setCalcExpr('(50000 * 0.065 / 12) / (1 - (1 + 0.065 / 12) ^ -360)')">Monthly Loan Payment ($50k 30yr)</button>
+                  </div>
+
+                  <div class="calc-input-row">
+                    <input type="text" class="form-input calc-input" id="calc-expr-input" value="(1000 * (1 + 0.05 / 12) ^ (12 * 5))" placeholder="Enter mathematical expression...">
+                    <button class="btn btn-action" id="btn-calc-eval" onclick="executePlaygroundCalculator()">Evaluate Safely</button>
+                  </div>
+
+                  <div class="calc-result-box" id="calc-result-box" style="display: none;">
+                    <div class="calc-res-header">
+                      <span class="calc-res-label">COMPUTED RESULT</span>
+                      <span class="calc-speed" id="calc-res-latency">&lt; 0.1ms latency</span>
+                    </div>
+                    <div class="calc-res-val" id="calc-res-val">--</div>
+                    <div class="calc-res-meta">
+                      <span class="tag-clean" id="calc-res-sandbox">PASS (AST sanitized, zero injection vector)</span>
+                      <span class="calc-expr-mirror" id="calc-res-mirror"></span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- SUB-VIEW 3: PAYMENT GATEWAY (Node.js 18) -->
+              <div class="playground-subview" id="pg-subview-node" style="display: none;">
+                <!-- Microservices Inventory Strip -->
+                <div class="pg-ms-strip">
+                  <span class="pg-ms-title">RUNNING MICROSERVICES:</span>
+                  <span class="pg-ms-badge badge-status-valid">payment-checkout-service (:3000)</span>
+                  <span class="pg-ms-badge badge-status-valid">payment-webhook-service (:3001)</span>
+                  <span class="pg-ms-badge badge-status-valid">payment-settlement-service (:3002)</span>
+                </div>
+
+                <div class="payment-gateway-layout">
+                  <!-- Left: Interactive Checkout & Authorization -->
+                  <div class="card payment-form-card">
+                    <div class="card-header-styled">
+                      <h5>💳 Interactive Merchant Checkout (Node.js 18 / Express)</h5>
+                      <span class="status-tag tag-clean">PCI-DSS HERMETIC SANDBOX</span>
+                    </div>
+                    
+                    <div class="test-cards-bar">
+                      <span class="test-cards-label">Quick Test Cards:</span>
+                      <button type="button" class="btn btn-tiny btn-preset" onclick="fillTestCard('visa')">Visa (4242)</button>
+                      <button type="button" class="btn btn-tiny btn-preset" onclick="fillTestCard('mastercard')">MasterCard (5555)</button>
+                      <button type="button" class="btn btn-tiny btn-preset" onclick="fillTestCard('amex')">Amex (3782)</button>
+                    </div>
+
+                    <div class="form-row">
+                      <label>Card Number:</label>
+                      <input type="text" class="form-input" id="pay-card-num" value="4242 4242 4242 4242" placeholder="0000 0000 0000 0000">
+                    </div>
+
+                    <div class="form-row-multi">
+                      <div class="form-col">
+                        <label>Expiration Month/Year:</label>
+                        <div class="exp-group">
+                          <input type="text" class="form-input" id="pay-card-exp-m" value="12" style="width: 50px;" placeholder="MM">
+                          <span>/</span>
+                          <input type="text" class="form-input" id="pay-card-exp-y" value="28" style="width: 60px;" placeholder="YY">
+                        </div>
+                      </div>
+                      <div class="form-col">
+                        <label>CVV / CVC:</label>
+                        <input type="password" class="form-input" id="pay-card-cvv" value="842" style="width: 70px;" maxlength="4" placeholder="123">
+                      </div>
+                      <div class="form-col">
+                        <label>Amount &amp; Currency:</label>
+                        <div class="amount-group">
+                          <input type="number" class="form-input" id="pay-amount" value="129.99" step="0.01" style="width: 100px;">
+                          <select class="form-input" id="pay-currency" style="width: 80px;">
+                            <option value="USD">USD ($)</option>
+                            <option value="EUR">EUR (€)</option>
+                            <option value="GBP">GBP (£)</option>
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="form-row">
+                      <label>Payment Description / Order ID:</label>
+                      <input type="text" class="form-input" id="pay-desc" value="Cloud Compute Enterprise Subscription #8201">
+                    </div>
+
+                    <div class="form-actions-row">
+                      <button type="button" class="btn btn-action" id="btn-pay-auth" onclick="executePaymentCheckout()">
+                        <i class="fas fa-lock"></i> Authorize &amp; Capture Charge
+                      </button>
+                      <button type="button" class="btn btn-secondary" onclick="dispatchPaymentWebhook()">
+                        <i class="fas fa-bolt"></i> Dispatch Webhook Event
+                      </button>
+                    </div>
+
+                    <div class="transfer-feedback" id="payment-feedback" style="display: none;"></div>
+                  </div>
+
+                  <!-- Right: Live Response & Webhook Verification -->
+                  <div class="card payment-response-card">
+                    <div class="card-header-styled">
+                      <h5>⚡ Live Authorization &amp; Webhook Telemetry</h5>
+                      <span class="status-tag tag-clean" id="pay-status-pill">HTTP 200 OK</span>
+                    </div>
+
+                    <div class="pay-meta-grid">
+                      <div class="pay-meta-box">
+                        <span class="lbl">CHARGE ID:</span>
+                        <code class="val mono" id="pay-res-id">ch_3N8291048192</code>
+                      </div>
+                      <div class="pay-meta-box">
+                        <span class="lbl">AUTH CODE:</span>
+                        <code class="val mono" id="pay-res-auth">AUTH_819203</code>
+                      </div>
+                      <div class="pay-meta-box">
+                        <span class="lbl">3D SECURE:</span>
+                        <span class="val status-tag tag-clean" id="pay-res-3ds">AUTHENTICATED</span>
+                      </div>
+                      <div class="pay-meta-box">
+                        <span class="lbl">WEBHOOK DELIVERY:</span>
+                        <span class="val status-tag tag-clean" id="pay-res-webhook">DELIVERED (200 OK)</span>
+                      </div>
+                    </div>
+
+                    <div class="pay-json-viewer">
+                      <div class="viewer-header">
+                        <span>LIVE STRIPE-COMPATIBLE JSON RESPONSE:</span>
+                      </div>
+                      <pre class="code-view json-view" id="pay-json-output" style="max-height: 220px; font-size: 11px;"></pre>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Live Payment Transactions Table -->
+                <div class="card mt-3">
+                  <div class="card-header-styled">
+                    <h5>📜 Recent Payment Authorizations &amp; Webhook Ledger</h5>
+                    <button class="btn btn-tiny btn-action" onclick="refreshPaymentTransactions()"><i class="fas fa-sync-alt"></i> Refresh Ledger</button>
+                  </div>
+                  <div class="table-responsive">
+                    <table class="data-table" id="payment-tx-table">
+                      <thead>
+                        <tr>
+                          <th>Charge ID</th>
+                          <th>Timestamp</th>
+                          <th>Card Details</th>
+                          <th>Amount</th>
+                          <th>Status</th>
+                          <th>Webhook Signature</th>
+                        </tr>
+                      </thead>
+                      <tbody id="payment-tx-tbody">
+                        <!-- Populated dynamically -->
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+
+          </div>
+        </div>
+
+      </div>
+
+    </main>
+
+    <!-- Bottom Section: Recent Build History Strip (Full 12 cols) -->
+    <section class="history-panel">
+      <div class="history-header">
+        <div class="history-title-group">
+          <h2 class="section-title">RECENT BUILD HISTORY &amp; ATTESTATION LEDGER</h2>
+          <span class="history-count" id="history-total">Loading cryptographic chain...</span>
+        </div>
+        <div class="history-actions">
+          <span class="chain-status-indicator" id="chain-status-indicator">
+            <span class="status-dot dot-active"></span> CHAIN INTACT
+          </span>
+        </div>
+      </div>
+
+      <div class="table-responsive">
+        <table class="data-table" id="history-table">
+          <thead>
+            <tr>
+              <th style="width: 140px;">Build ID</th>
+              <th style="width: 180px;">Time</th>
+              <th>Project</th>
+              <th style="width: 110px;">HTTP</th>
+              <th style="width: 120px;">Verdict</th>
+              <th>Findings</th>
+              <th style="width: 150px;">Attestation</th>
+            </tr>
+          </thead>
+          <tbody id="history-tbody">
+            <tr>
+              <td colspan="7" class="text-muted text-center" style="padding: 24px;">Loading build history...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- Standalone Verification Modal (Preserved for direct audit calls) -->
+  <div class="modal-backdrop" id="modal-verify" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Attestation Chain Cryptographic Audit</h3>
+        <button class="btn-close" onclick="closeVerifyModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="audit-summary-block">
+          <div class="audit-status" id="modal-audit-status-text">✓ Cryptographic Audit Passed</div>
+          <p class="audit-sub">All historical Ed25519 signatures, Merkle self-hashes, and chain linkages verified.</p>
+        </div>
+        <div class="modal-log-wrap">
+          <pre class="code-view" id="modal-verify-raw-log">Running cryptographic verification...</pre>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-action" onclick="closeVerifyModal()">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/vendor/xterm.js"></script>
+  <script src="/static/vendor/xterm-addon-fit.js"></script>
+  <script src="/static/app.js?v=5"></script>
+</body>
+</html>

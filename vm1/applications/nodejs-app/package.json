@@ -1,0 +1,14 @@
+{
+  "name": "nodejs-app",
+  "version": "1.0.0",
+  "description": "Small Node.js service used to validate PipeJack multi-language support",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "build": "echo 'build complete'",
+    "test": "echo 'no tests'"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}

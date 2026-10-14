@@ -1,0 +1,48 @@
+version: "1.0"
+pipeline: "nodejs-build"
+allowed_binaries:
+  - /usr/local/bin/node
+  - /usr/local/bin/npm
+  - /usr/local/bin/npx
+  - /bin/bash
+  - /bin/sh
+  - /usr/bin/dash
+  - /usr/bin/env
+  - /usr/bin/echo
+  - /usr/bin/cat
+  - /usr/bin/sleep
+  - /usr/local/bin/pipejackd
+  - /runc
+  - /bin/busybox
+  - /usr/bin/find
+blocked_binaries:
+  - /usr/bin/curl
+  - /usr/bin/wget
+allowed_filesystem_changes:
+  - pattern: "node_modules/**"
+    action: ignore
+  - pattern: "package-lock.json"
+    action: ignore
+  - pattern: "dist/**"
+    action: ignore
+severity_thresholds:
+  high: 70
+  medium: 40
+  low: 10
+actions_on_violation:
+  block: true
+  quarantine: true
+  alert: true
+
+allowed_egress:
+  - "127.0.0.1:*"
+  - "172.17.0.1:*"
+  - "0.0.0.0/0:443"
+  - "*:53"
+
+enforce_network: true
+
+anomaly_enabled: true
+anomaly_threshold: 3.0
+anomaly_min_baseline: 5
+anomaly_block: false
