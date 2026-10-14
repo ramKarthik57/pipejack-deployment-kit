@@ -95,6 +95,7 @@ unset TEST_SPACES_OUT TEST_REL_OUT_RAW TEST_REL_OUT PRE_EXISTING_SAFETY_DIR
 unset VM1_TARGET_DIR VM1_OUT_DIR VM1_BASHRC VM1_LOG
 unset MOCK_SPACES_DIR DIR_SPACES MOCK_SSH_DIR TMP_VM2_TEST_DIR TMP_TEST_KEY_DIR
 unset HOSTILE_SENTINEL_DIR OUTSIDE_TEST_FIXTURE OUTSIDE_TEST_FIXTURES
+unset TRAPS_DEFERRED PENDING_SIGNAL TEST_RACE_HOOK TEST_RACE_FAIL_HOOK
 
 # Registry of temporary paths created exclusively by THIS test execution process
 declare -A CREATED_TEST_PATHS=()
@@ -469,8 +470,34 @@ cleanup_suite_traps() {
     done
 }
 
+# -----------------------------------------------------------------------------
+# Signal Deferral and Race-Free Fixture Creation Infrastructure
+# -----------------------------------------------------------------------------
+TRAPS_DEFERRED=0
+PENDING_SIGNAL=""
+TEST_RACE_HOOK=""
+TEST_RACE_FAIL_HOOK=""
+
+defer_signals() {
+    TRAPS_DEFERRED=1
+    PENDING_SIGNAL=""
+}
+
+resume_signals() {
+    TRAPS_DEFERRED=0
+    if [ -n "$PENDING_SIGNAL" ]; then
+        local sig="$PENDING_SIGNAL"
+        PENDING_SIGNAL=""
+        handle_signal "$sig"
+    fi
+}
+
 handle_signal() {
     local sig="$1"
+    if [ "${TRAPS_DEFERRED:-0}" -eq 1 ]; then
+        PENDING_SIGNAL="$sig"
+        return 0
+    fi
     # Immediately disable traps to prevent recursion and terminate safely
     trap - EXIT INT TERM HUP
     cleanup_suite_traps
@@ -487,26 +514,131 @@ trap 'handle_signal TERM' TERM
 trap 'handle_signal HUP' HUP
 trap cleanup_suite_traps EXIT
 
+create_safe_tmp_dir() {
+    local out_var="$1"
+    shift
+    defer_signals
+    local created
+    created=$(mktemp -d "$@" 2>/dev/null || echo "")
+    if [ -n "$created" ]; then
+        if [ -n "${TEST_RACE_HOOK:-}" ]; then
+            "$TEST_RACE_HOOK" "$created"
+        fi
+        register_test_path "$created"
+        printf -v "$out_var" '%s' "$created"
+    else
+        if [ -n "${TEST_RACE_FAIL_HOOK:-}" ]; then
+            "$TEST_RACE_FAIL_HOOK"
+        fi
+    fi
+    resume_signals
+    [ -n "$created" ]
+}
+
+create_safe_tmp_file() {
+    local out_var="$1"
+    shift
+    defer_signals
+    local created
+    created=$(mktemp "$@" 2>/dev/null || echo "")
+    if [ -n "$created" ]; then
+        if [ -n "${TEST_RACE_HOOK:-}" ]; then
+            "$TEST_RACE_HOOK" "$created"
+        fi
+        register_test_path "$created"
+        printf -v "$out_var" '%s' "$created"
+    else
+        if [ -n "${TEST_RACE_FAIL_HOOK:-}" ]; then
+            "$TEST_RACE_FAIL_HOOK"
+        fi
+    fi
+    resume_signals
+    [ -n "$created" ]
+}
+
+create_safe_outside_dir() {
+    local out_var="$1"
+    local template="${2:-pipejack-boundary-test-XXXXXX}"
+    defer_signals
+    local created=""
+    if [ -d "/var/tmp" ] && [ -w "/var/tmp" ]; then
+        created=$(mktemp -d -p /var/tmp "$template" 2>/dev/null || echo "")
+    fi
+    if [ -n "$created" ]; then
+        if [ -n "${TEST_RACE_HOOK:-}" ]; then
+            "$TEST_RACE_HOOK" "$created"
+        fi
+        register_outside_fixture "$created" "dir"
+        printf -v "$out_var" '%s' "$created"
+    else
+        if [ -n "${TEST_RACE_FAIL_HOOK:-}" ]; then
+            "$TEST_RACE_FAIL_HOOK"
+        fi
+    fi
+    resume_signals
+    [ -n "$created" ]
+}
+
+create_safe_symlink() {
+    local target="$1"
+    local link_path="$2"
+    local loc="${3:-tmp}"
+    defer_signals
+    local ok=0
+    if ln -s "$target" "$link_path" 2>/dev/null; then
+        ok=1
+        if [ -n "${TEST_RACE_HOOK:-}" ]; then
+            "$TEST_RACE_HOOK" "$link_path"
+        fi
+        if [ "$loc" = "outside" ]; then
+            register_outside_fixture "$link_path" "symlink"
+        else
+            register_test_path "$link_path"
+        fi
+    else
+        if [ -n "${TEST_RACE_FAIL_HOOK:-}" ]; then
+            "$TEST_RACE_FAIL_HOOK"
+        fi
+    fi
+    resume_signals
+    [ $ok -eq 1 ]
+}
+
+create_safe_nested_dir() {
+    local dir_path="$1"
+    defer_signals
+    local ok=0
+    if mkdir -p "$dir_path" 2>/dev/null; then
+        ok=1
+        if [ -n "${TEST_RACE_HOOK:-}" ]; then
+            "$TEST_RACE_HOOK" "$dir_path"
+        fi
+    else
+        if [ -n "${TEST_RACE_FAIL_HOOK:-}" ]; then
+            "$TEST_RACE_FAIL_HOOK"
+        fi
+    fi
+    resume_signals
+    [ $ok -eq 1 ]
+}
+
 # Internal subtest handlers to exercise the actual traps and cleanup implementation directly
 if [ "${1:-}" = "--internal-test-cleanup-env" ]; then
-    LEGIT_TMP=$(mktemp -d "/tmp/pipejack-legit-cleanup-XXXXXX") || exit 1
-    register_test_path "$LEGIT_TMP"
+    create_safe_tmp_dir LEGIT_TMP "/tmp/pipejack-legit-cleanup-XXXXXX" || exit 1
     echo "LEGIT_CREATED:$LEGIT_TMP"
     exit 0
 fi
 
 if [ "${1:-}" = "--internal-test-cleanup-signal" ]; then
     SIG_NAME="${2:-INT}"
-    SIG_TMP=$(mktemp -d "/tmp/pipejack-sig-cleanup-XXXXXX") || { echo "[-] Failed to create SIG_TMP in /tmp" >&2; exit 1; }
-    register_test_path "$SIG_TMP"
+    create_safe_tmp_dir SIG_TMP "/tmp/pipejack-sig-cleanup-XXXXXX" || { echo "[-] Failed to create SIG_TMP in /tmp" >&2; exit 1; }
     echo "SIG_TMP:$SIG_TMP"
     if [ ! -d "/var/tmp" ] || [ ! -w "/var/tmp" ]; then
         echo "[-] /var/tmp is missing or not writable" >&2
         exit 1
     fi
-    SIG_OUTSIDE=$(mktemp -d -p /var/tmp pipejack-boundary-test-XXXXXX) || { echo "[-] Failed to create SIG_OUTSIDE in /var/tmp" >&2; exit 1; }
+    create_safe_outside_dir SIG_OUTSIDE "pipejack-boundary-test-XXXXXX" || { echo "[-] Failed to create SIG_OUTSIDE in /var/tmp" >&2; exit 1; }
     OUTSIDE_TEST_FIXTURE="$SIG_OUTSIDE"
-    register_outside_fixture "$SIG_OUTSIDE" "dir"
     echo "SIG_OUTSIDE:$SIG_OUTSIDE"
     case "$SIG_NAME" in
         TERM) kill -TERM $$ ;;
@@ -517,13 +649,70 @@ if [ "${1:-}" = "--internal-test-cleanup-signal" ]; then
     exit 0
 fi
 
+if [ "${1:-}" = "--internal-test-creation-race" ]; then
+    RACE_MODE="${2:-tmp_dir}"
+    SIG_NAME="${3:-INT}"
+    TARGET_PARAM="${4:-}"
+
+    deliver_race_signal() {
+        local fixture="$1"
+        echo "RACE_FIXTURE_CREATED:$fixture"
+        case "$SIG_NAME" in
+            TERM) kill -TERM $$ ;;
+            HUP)  kill -HUP $$ ;;
+            *)    kill -INT $$ ;;
+        esac
+    }
+    TEST_RACE_HOOK="deliver_race_signal"
+
+    deliver_fail_signal() {
+        case "$SIG_NAME" in
+            TERM) kill -TERM $$ ;;
+            HUP)  kill -HUP $$ ;;
+            *)    kill -INT $$ ;;
+        esac
+    }
+    TEST_RACE_FAIL_HOOK="deliver_fail_signal"
+
+    case "$RACE_MODE" in
+        tmp_dir)
+            create_safe_tmp_dir FIXTURE "/tmp/pipejack-race-tmp-XXXXXX"
+            ;;
+        outside_dir)
+            create_safe_outside_dir FIXTURE "pipejack-boundary-test-XXXXXX"
+            ;;
+        tmp_symlink)
+            LINK="/tmp/pipejack-race-link-$$"
+            create_safe_symlink "$TARGET_PARAM" "$LINK" "tmp"
+            ;;
+        outside_symlink)
+            LINK="/var/tmp/pipejack-boundary-test-link-$$"
+            create_safe_symlink "$TARGET_PARAM" "$LINK" "outside"
+            ;;
+        outside_dangling_symlink)
+            TARGET="/var/tmp/pipejack-boundary-target-nonexistent-$$"
+            LINK="/var/tmp/pipejack-boundary-test-dangling-$$"
+            create_safe_symlink "$TARGET" "$LINK" "outside"
+            ;;
+        failed_creation)
+            create_safe_tmp_dir FIXTURE "/nonexistent_race_dir_12345/test-XXXXXX"
+            ;;
+        *)
+            echo "[-] Unknown race test mode: $RACE_MODE" >&2
+            exit 1
+            ;;
+    esac
+
+    echo "SHOULD_NOT_REACH_HERE"
+    exit 0
+fi
+
 # Create a unique test-owned canary file (using PID and nanosecond timestamp)
 UNIQUE_CANARY_TAG="pipejack_canary_${$}_$(date +%s%N)"
-UNIQUE_CANARY_FILE=$(mktemp "/tmp/${UNIQUE_CANARY_TAG}_XXXXXX.marker") || {
+create_safe_tmp_file UNIQUE_CANARY_FILE "/tmp/${UNIQUE_CANARY_TAG}_XXXXXX.marker" || {
     echo "[-] Failed to create unique canary marker" >&2
     exit 1
 }
-register_test_path "$UNIQUE_CANARY_FILE"
 echo "$UNIQUE_CANARY_TAG" > "$UNIQUE_CANARY_FILE"
 
 echo "============================================================"
@@ -1262,8 +1451,8 @@ fi
 # -----------------------------------------------------------------------------
 section "Trap Cleanup Safety Against Pre-Populated / Hostile Environment Variables"
 
-HOSTILE_SENTINEL_DIR=$(mktemp -d "/tmp/pipejack-hostile-sentinel-XXXXXX") || { echo "[-] Failed to create hostile sentinel dir" >&2; exit 1; }
-register_test_path "$HOSTILE_SENTINEL_DIR"
+HOSTILE_SENTINEL_DIR=""
+create_safe_tmp_dir HOSTILE_SENTINEL_DIR "/tmp/pipejack-hostile-sentinel-XXXXXX" || { echo "[-] Failed to create hostile sentinel dir" >&2; exit 1; }
 echo "IMMUTABLE_SENTINEL_CONTENT_$$" > "$HOSTILE_SENTINEL_DIR/sentinel.data"
 
 TRAP_SAFETY_OK=1
@@ -1280,9 +1469,7 @@ register_test_path "$HOSTILE_SENTINEL_DIR"
 
 # 1b: Out-of-bounds path must NOT be deleted by safe_delete_path (even if registered)
 OUTSIDE_TMP_DIR=""
-if [ -d "/var/tmp" ] && [ -w "/var/tmp" ]; then
-    OUTSIDE_TMP_DIR=$(mktemp -d -p /var/tmp pipejack-boundary-test-XXXXXX 2>/dev/null || echo "")
-fi
+create_safe_outside_dir OUTSIDE_TMP_DIR "pipejack-boundary-test-XXXXXX"
 
 if [ -z "$OUTSIDE_TMP_DIR" ] || [ ! -d "$OUTSIDE_TMP_DIR" ]; then
     TRAP_SAFETY_OK=0
@@ -1290,7 +1477,6 @@ if [ -z "$OUTSIDE_TMP_DIR" ] || [ ! -d "$OUTSIDE_TMP_DIR" ]; then
 else
     # Register in OUTSIDE_TEST_FIXTURE and tracker so interruption traps guarantee cleanup
     OUTSIDE_TEST_FIXTURE="$OUTSIDE_TMP_DIR"
-    register_outside_fixture "$OUTSIDE_TMP_DIR" "dir"
     register_test_path "$OUTSIDE_TMP_DIR"
     safe_delete_path "$OUTSIDE_TMP_DIR"
     if [ ! -d "$OUTSIDE_TMP_DIR" ]; then
@@ -1310,11 +1496,10 @@ fi
 
 # 1c: Negative assertion checks on cleanup_outside_fixture
 # 1c-1: Symlinked path (valid target) in /var/tmp must be rejected by cleanup_outside_fixture
-TEST_SYMLINK_TARGET=$(mktemp -d -p /var/tmp pipejack-boundary-target-XXXXXX)
-register_outside_fixture "$TEST_SYMLINK_TARGET" "dir"
+TEST_SYMLINK_TARGET=""
+create_safe_outside_dir TEST_SYMLINK_TARGET "pipejack-boundary-target-XXXXXX"
 TEST_SYMLINK="/var/tmp/pipejack-boundary-test-symlink-$$"
-ln -s "$TEST_SYMLINK_TARGET" "$TEST_SYMLINK"
-register_outside_fixture "$TEST_SYMLINK" "symlink"
+create_safe_symlink "$TEST_SYMLINK_TARGET" "$TEST_SYMLINK" "outside"
 OUTSIDE_TEST_FIXTURE="$TEST_SYMLINK"
 if cleanup_outside_fixture 2>/dev/null; then
     TRAP_SAFETY_OK=0
@@ -1334,8 +1519,7 @@ safe_delete_outside_fixture "$TEST_SYMLINK_TARGET"
 # 1c-2: Dangling symlink in /var/tmp must be rejected by cleanup_outside_fixture
 TEST_DANGLING_TARGET="/var/tmp/pipejack-boundary-target-nonexistent-$$"
 TEST_DANGLING_SYMLINK="/var/tmp/pipejack-boundary-test-dangling-$$"
-ln -s "$TEST_DANGLING_TARGET" "$TEST_DANGLING_SYMLINK"
-register_outside_fixture "$TEST_DANGLING_SYMLINK" "symlink"
+create_safe_symlink "$TEST_DANGLING_TARGET" "$TEST_DANGLING_SYMLINK" "outside"
 OUTSIDE_TEST_FIXTURE="$TEST_DANGLING_SYMLINK"
 if cleanup_outside_fixture 2>/dev/null; then
     TRAP_SAFETY_OK=0
@@ -1348,10 +1532,10 @@ fi
 safe_delete_outside_fixture "$TEST_DANGLING_SYMLINK"
 
 # 1c-3: Nested path in /var/tmp must be rejected by cleanup_outside_fixture
-TEST_NESTED_PARENT=$(mktemp -d -p /var/tmp pipejack-boundary-nested-XXXXXX)
-register_outside_fixture "$TEST_NESTED_PARENT" "dir"
+TEST_NESTED_PARENT=""
+create_safe_outside_dir TEST_NESTED_PARENT "pipejack-boundary-nested-XXXXXX"
 TEST_NESTED_CHILD="$TEST_NESTED_PARENT/pipejack-boundary-test-child-$$"
-mkdir -p "$TEST_NESTED_CHILD"
+create_safe_nested_dir "$TEST_NESTED_CHILD"
 OUTSIDE_TEST_FIXTURE="$TEST_NESTED_CHILD"
 if cleanup_outside_fixture 2>/dev/null; then
     TRAP_SAFETY_OK=0
@@ -1364,8 +1548,8 @@ fi
 safe_delete_outside_fixture "$TEST_NESTED_PARENT"
 
 # 1c-4: Mismatched basename pattern must be rejected by cleanup_outside_fixture
-TEST_MISMATCH_DIR=$(mktemp -d -p /var/tmp pipejack-boundary-mismatch-XXXXXX)
-register_outside_fixture "$TEST_MISMATCH_DIR" "dir"
+TEST_MISMATCH_DIR=""
+create_safe_outside_dir TEST_MISMATCH_DIR "pipejack-boundary-mismatch-XXXXXX"
 OUTSIDE_TEST_FIXTURE="$TEST_MISMATCH_DIR"
 if cleanup_outside_fixture 2>/dev/null; then
     TRAP_SAFETY_OK=0
@@ -1441,10 +1625,10 @@ if [ ! -f "$HOSTILE_SENTINEL_DIR/sentinel.data" ]; then
 fi
 
 # 2b-2: Nested matching-name directory must be refused (must be direct child of /tmp)
-NESTED_TMP_PARENT=$(mktemp -d "/tmp/pipejack-nested-parent-XXXXXX")
-register_test_path "$NESTED_TMP_PARENT"
+NESTED_TMP_PARENT=""
+create_safe_tmp_dir NESTED_TMP_PARENT "/tmp/pipejack-nested-parent-XXXXXX"
 NESTED_TMP_CHILD="$NESTED_TMP_PARENT/pipejack-legit-cleanup-child-$$"
-mkdir -p "$NESTED_TMP_CHILD"
+create_safe_nested_dir "$NESTED_TMP_CHILD"
 if recover_and_clean_test_dir "$NESTED_TMP_CHILD" "pipejack-legit-cleanup-*" 2>/dev/null; then
     TRAP_SAFETY_OK=0
     echo "  [-] Security defect: recover_and_clean_test_dir accepted nested directory!" >&2
@@ -1456,11 +1640,10 @@ fi
 safe_delete_path "$NESTED_TMP_PARENT"
 
 # 2b-3: Symlinked directory matching pattern (valid target) must be refused
-TARGET_FOR_LINK=$(mktemp -d "/tmp/pipejack-target-XXXXXX")
-register_test_path "$TARGET_FOR_LINK"
+TARGET_FOR_LINK=""
+create_safe_tmp_dir TARGET_FOR_LINK "/tmp/pipejack-target-XXXXXX"
 SYMLINK_LEGIT="/tmp/pipejack-legit-cleanup-symlink-$$"
-ln -s "$TARGET_FOR_LINK" "$SYMLINK_LEGIT"
-register_test_path "$SYMLINK_LEGIT"
+create_safe_symlink "$TARGET_FOR_LINK" "$SYMLINK_LEGIT" "tmp"
 if recover_and_clean_test_dir "$SYMLINK_LEGIT" "pipejack-legit-cleanup-*" 2>/dev/null; then
     TRAP_SAFETY_OK=0
     echo "  [-] Security defect: recover_and_clean_test_dir accepted symlink!" >&2
@@ -1479,8 +1662,7 @@ safe_delete_path "$TARGET_FOR_LINK"
 # 2b-4: Dangling symlinked directory matching pattern must be refused (not masked as absent)
 DANGLING_TARGET_LEGIT="/tmp/pipejack-target-nonexistent-$$"
 DANGLING_LEGIT="/tmp/pipejack-legit-cleanup-dangling-$$"
-ln -s "$DANGLING_TARGET_LEGIT" "$DANGLING_LEGIT"
-register_test_path "$DANGLING_LEGIT"
+create_safe_symlink "$DANGLING_TARGET_LEGIT" "$DANGLING_LEGIT" "tmp"
 if recover_and_clean_test_dir "$DANGLING_LEGIT" "pipejack-legit-cleanup-*" 2>/dev/null; then
     TRAP_SAFETY_OK=0
     echo "  [-] Security defect: recover_and_clean_test_dir accepted dangling symlink!" >&2
@@ -1492,8 +1674,8 @@ fi
 safe_delete_path "$DANGLING_LEGIT"
 
 # 2b-5: Valid direct child of /tmp matching pattern must succeed
-VALID_DIRECT_TMP=$(mktemp -d "/tmp/pipejack-legit-cleanup-valid-XXXXXX")
-register_test_path "$VALID_DIRECT_TMP"
+VALID_DIRECT_TMP=""
+create_safe_tmp_dir VALID_DIRECT_TMP "/tmp/pipejack-legit-cleanup-valid-XXXXXX"
 if ! recover_and_clean_test_dir "$VALID_DIRECT_TMP" "pipejack-legit-cleanup-*"; then
     TRAP_SAFETY_OK=0
     echo "  [-] recover_and_clean_test_dir failed on valid direct child directory" >&2
@@ -1543,11 +1725,91 @@ if ! echo "$SIG_OUTPUT" | grep -q "^STATUS:PASS"; then
     echo "  [-] Multi-signal termination safety test failed: $SIG_OUTPUT" >&2
 fi
 
+# 4. Subtest C: Deterministic creation-to-registration interrupt race regression tests
+RACE_OUTPUT=$(python3 -c "
+import subprocess, os, signal
+
+SCRIPT_FILE = '$SCRIPT_FILE'
+all_race_ok = True
+details = []
+
+race_scenarios = [
+    ('tmp_dir', 'INT', 130),
+    ('tmp_dir', 'TERM', 143),
+    ('tmp_dir', 'HUP', 129),
+    ('outside_dir', 'INT', 130),
+    ('outside_dir', 'TERM', 143),
+    ('outside_dir', 'HUP', 129),
+    ('tmp_symlink', 'INT', 130),
+    ('tmp_symlink', 'TERM', 143),
+    ('tmp_symlink', 'HUP', 129),
+    ('outside_symlink', 'INT', 130),
+    ('outside_symlink', 'TERM', 143),
+    ('outside_symlink', 'HUP', 129),
+    ('outside_dangling_symlink', 'INT', 130),
+    ('outside_dangling_symlink', 'TERM', 143),
+    ('outside_dangling_symlink', 'HUP', 129),
+    ('failed_creation', 'INT', 130),
+    ('failed_creation', 'TERM', 143),
+    ('failed_creation', 'HUP', 129),
+]
+
+for mode, sig, exp_rc in race_scenarios:
+    target = None
+    canary = None
+    if mode == 'tmp_symlink':
+        target = subprocess.run(['mktemp', '-d', '/tmp/pipejack-ext-target-XXXXXX'], capture_output=True, text=True).stdout.strip()
+    elif mode == 'outside_symlink':
+        target = subprocess.run(['mktemp', '-d', '-p', '/var/tmp', 'pipejack-boundary-target-XXXXXX'], capture_output=True, text=True).stdout.strip()
+    elif mode == 'failed_creation':
+        canary = subprocess.run(['mktemp', '/tmp/pipejack-ext-canary-XXXXXX'], capture_output=True, text=True).stdout.strip()
+
+    args = ['bash', SCRIPT_FILE, '--internal-test-creation-race', mode, sig]
+    if target:
+        args.append(target)
+
+    res = subprocess.run(
+        args,
+        capture_output=True,
+        text=True,
+        preexec_fn=lambda: signal.signal(signal.SIGHUP, signal.SIG_DFL)
+    )
+
+    fixture = None
+    for line in res.stdout.splitlines():
+        if line.startswith('RACE_FIXTURE_CREATED:'):
+            fixture = line.split(':', 1)[1].strip()
+
+    rc_ok = (res.returncode == exp_rc)
+    unreached_ok = ('SHOULD_NOT_REACH_HERE' not in res.stdout)
+    fixture_cleaned = (not fixture or (not os.path.exists(fixture) and not os.path.lexists(fixture)))
+    target_preserved = (not target or os.path.exists(target))
+    canary_preserved = (not canary or os.path.exists(canary))
+
+    case_ok = rc_ok and unreached_ok and fixture_cleaned and target_preserved and canary_preserved
+    if not case_ok:
+        all_race_ok = False
+    details.append(f'{mode}({sig}):rc={res.returncode}(exp {exp_rc}),cleaned={fixture_cleaned},target_ok={target_preserved}')
+
+    if target and os.path.lexists(target):
+        subprocess.run(['rm', '-rf', target])
+    if canary and os.path.lexists(canary):
+        subprocess.run(['rm', '-f', canary])
+
+status = 'PASS' if all_race_ok else 'FAIL'
+print(f'STATUS:{status}|' + '; '.join(details))
+" 2>&1)
+
+if ! echo "$RACE_OUTPUT" | grep -q "^STATUS:PASS"; then
+    TRAP_SAFETY_OK=0
+    echo "  [-] Creation-registration race regression tests failed: $RACE_OUTPUT" >&2
+fi
+
 # Clean up sentinel directory safely via safe_delete_path
 safe_delete_path "$HOSTILE_SENTINEL_DIR"
 
 if [ $TRAP_SAFETY_OK -eq 1 ]; then
-    pass "Trap cleanup safety verified: pre-populated hostile environment variables cannot trigger deletion, signals terminate immediately with proper exit codes, and only registered paths are removed"
+    pass "Trap cleanup safety verified: pre-populated hostile environment variables cannot trigger deletion, creation-registration races are closed with deferred signal dispatch, signals terminate immediately with proper exit codes, and only registered paths are removed"
 else
     fail "Trap cleanup safety regression test failed"
 fi
