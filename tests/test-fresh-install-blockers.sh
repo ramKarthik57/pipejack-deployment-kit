@@ -1666,9 +1666,13 @@ for unit_file in "$ROOT_DIR/vm2/deployment/systemd/pipejack-ci.service" "$ROOT_D
     fi
 done
 
-# 2. Isolated systemd-analyze verify with minimal temporary dependency fixtures
-if [ $SYSTEMD_TEST_OK -eq 1 ] && command -v systemd-analyze >/dev/null 2>&1; then
-    if command -v unshare >/dev/null 2>&1 && unshare -rm true >/dev/null 2>&1; then
+# 2. Dependency-aware systemd-analyze verify with minimal temporary dependency fixtures
+if [ $SYSTEMD_TEST_OK -eq 1 ]; then
+    if ! command -v systemd-analyze >/dev/null 2>&1; then
+        fail "systemd-analyze not available in test environment; systemd service unit verification NOT EXECUTED (static structural checks passed)"
+    elif ! command -v unshare >/dev/null 2>&1 || ! unshare -rm true >/dev/null 2>&1; then
+        fail "unshare namespace capabilities not available in test environment; isolated dependency verification of pipejack-ci.service NOT EXECUTED (requires unshare mount namespace to mock /usr/local/bin/pipejack-ci; static structural checks passed)"
+    else
         TMP_SYSTEMD_FIXTURE=""
         create_safe_tmp_dir TMP_SYSTEMD_FIXTURE "/tmp/pipejack-systemd-fixture-XXXXXX" || {
             echo "[-] Failed to create systemd test fixture directory" >&2
@@ -1711,27 +1715,17 @@ EOF
             umount /usr/local/bin
         " 2>&1) || verify_ec=$?
 
-        # Check for verification errors
-        if [ $verify_ec -ne 0 ] || [ -n "$SYSTEMD_VERIFY_OUT" ]; then
-            SYSTEMD_TEST_OK=0
-            SYSTEMD_DIAGNOSTICS="$SYSTEMD_VERIFY_OUT"
-        fi
-
         safe_delete_path "$TMP_SYSTEMD_FIXTURE"
-    else
-        # If unshare is unavailable in this environment, verify demo-console directly
-        CONSOLE_VERIFY_OUT=$(systemd-analyze verify "$ROOT_DIR/vm2/deployment/systemd/pipejack-demo-console.service" 2>&1 || true)
-        if echo "$CONSOLE_VERIFY_OUT" | grep -q -E "Failed to|error|Unknown"; then
-            SYSTEMD_TEST_OK=0
-            SYSTEMD_DIAGNOSTICS="$CONSOLE_VERIFY_OUT"
+
+        # Verify exit code is 0 and zero warning/error diagnostics were produced
+        if [ $verify_ec -eq 0 ] && [ -z "$SYSTEMD_VERIFY_OUT" ]; then
+            pass "Packaged systemd service units verified: static structure clean and systemd-analyze verify passed with 0 errors/warnings against both units in isolated fixture root"
+        else
+            fail "systemd-analyze verify failed on packaged service units (exit code $verify_ec): $SYSTEMD_VERIFY_OUT"
         fi
     fi
-fi
-
-if [ $SYSTEMD_TEST_OK -eq 1 ]; then
-    pass "Packaged systemd service units verified: static structure clean and systemd-analyze verify passed with 0 errors/warnings in isolated fixture root"
 else
-    fail "systemd service unit verification failed: $SYSTEMD_DIAGNOSTICS"
+    fail "Systemd static structural check failed: $SYSTEMD_DIAGNOSTICS"
 fi
 
 # -----------------------------------------------------------------------------
