@@ -654,17 +654,82 @@ if [ "${1:-}" = "--internal-test-creation-race" ]; then
     SIG_NAME="${3:-INT}"
     TARGET_PARAM="${4:-}"
 
+    safe_cleanup_failed_hook_fixture() {
+        local fixture="$1"
+        local assertion_reason="$2"
+        echo "RACE_FIXTURE_VERIFY_FAILED:path=$fixture:assertion=$assertion_reason"
+
+        # Independent verification before attempting cleanup of failed fixture:
+        if [ -z "$fixture" ] || { [ ! -L "$fixture" ] && [ ! -e "$fixture" ]; }; then
+            exit 1
+        fi
+
+        # 1. Permitted test-owned basename pattern
+        local base
+        base="$(basename "$fixture")"
+        case "$base" in
+            pipejack-race-*|pipejack-boundary-test-*) ;;
+            *)
+                echo "RACE_FIXTURE_PRESERVED:path=$fixture:reason=unexpected_basename_pattern"
+                exit 1
+                ;;
+        esac
+
+        # 2. Permitted canonical parent (/tmp or /var/tmp)
+        local fdir cdir canon_tmp canon_vartmp
+        fdir="$(dirname "$fixture")"
+        cdir="$(cd "$fdir" 2>/dev/null && pwd -P)"
+        canon_tmp="$(cd /tmp && pwd -P)"
+        canon_vartmp="$(cd /var/tmp && pwd -P)"
+        if [ "$cdir" != "$canon_tmp" ] && [ "$cdir" != "$canon_vartmp" ]; then
+            echo "RACE_FIXTURE_PRESERVED:path=$fixture:reason=parent_not_permitted"
+            exit 1
+        fi
+
+        # 3. Ownership verification
+        local fuid
+        fuid="$(stat -c '%u' "$fixture" 2>/dev/null || stat -L -c '%u' "$fixture" 2>/dev/null || echo "-1")"
+        if [ "$fuid" -ne "$(id -u)" ]; then
+            echo "RACE_FIXTURE_PRESERVED:path=$fixture:reason=owner_mismatch"
+            exit 1
+        fi
+
+        # 4. Type-verified removal
+        if [ -L "$fixture" ]; then
+            if rm -f "$fixture" 2>/dev/null; then
+                echo "RACE_FAILED_FIXTURE_CLEANED:path=$fixture:type=symlink"
+            else
+                echo "RACE_FIXTURE_PRESERVED:path=$fixture:reason=rm_symlink_failed"
+            fi
+        elif [ -d "$fixture" ]; then
+            if rmdir "$fixture" 2>/dev/null; then
+                echo "RACE_FAILED_FIXTURE_CLEANED:path=$fixture:type=dir"
+            else
+                echo "RACE_FIXTURE_PRESERVED:path=$fixture:reason=rmdir_failed"
+            fi
+        elif [ -f "$fixture" ]; then
+            if rm -f "$fixture" 2>/dev/null; then
+                echo "RACE_FAILED_FIXTURE_CLEANED:path=$fixture:type=file"
+            else
+                echo "RACE_FIXTURE_PRESERVED:path=$fixture:reason=rm_file_failed"
+            fi
+        else
+            echo "RACE_FIXTURE_PRESERVED:path=$fixture:reason=unknown_type"
+        fi
+        exit 1
+    }
+
     deliver_race_signal() {
         local fixture="$1"
         local expected_type="${2:-}"
 
         # 1. Non-empty and exists on filesystem (using -L or -e)
         if [ -z "$fixture" ]; then
-            echo "RACE_FIXTURE_VERIFY_FAILED:empty_fixture_path"
+            echo "RACE_FIXTURE_VERIFY_FAILED:path=:assertion=empty_fixture_path"
             exit 1
         fi
         if [ ! -L "$fixture" ] && [ ! -e "$fixture" ]; then
-            echo "RACE_FIXTURE_VERIFY_FAILED:fixture_does_not_exist:$fixture"
+            echo "RACE_FIXTURE_VERIFY_FAILED:path=$fixture:assertion=fixture_does_not_exist"
             exit 1
         fi
 
@@ -683,26 +748,24 @@ if [ "${1:-}" = "--internal-test-creation-race" ]; then
         local exp_mode_type=""
         case "$RACE_MODE" in
             tmp_dir|outside_dir) exp_mode_type="dir" ;;
-            tmp_symlink|outside_symlink|outside_dangling_symlink) exp_mode_type="symlink" ;;
+            tmp_symlink|outside_symlink|outside_dangling_symlink|hook_fail_target) exp_mode_type="symlink" ;;
         esac
         local required_type="${exp_mode_type:-$expected_type}"
         if [ -n "$required_type" ] && [ "$actual_type" != "$required_type" ]; then
-            echo "RACE_FIXTURE_VERIFY_FAILED:type_mismatch:actual=$actual_type:expected=$required_type"
-            exit 1
+            safe_cleanup_failed_hook_fixture "$fixture" "type_mismatch:actual=$actual_type:expected=$required_type"
         fi
 
         # 3. Parent resolves to intended canonical /tmp or /var/tmp directory
         local fixture_parent
         fixture_parent="$(dirname "$fixture")"
         if [ ! -d "$fixture_parent" ]; then
-            echo "RACE_FIXTURE_VERIFY_FAILED:parent_not_dir:$fixture_parent"
-            exit 1
+            safe_cleanup_failed_hook_fixture "$fixture" "parent_not_dir:$fixture_parent"
         fi
         local actual_canonical_parent
         actual_canonical_parent="$(cd "$fixture_parent" 2>/dev/null && pwd -P)"
         local expected_canonical_parent=""
         case "$RACE_MODE" in
-            tmp_dir|tmp_symlink)
+            tmp_dir|tmp_symlink|hook_fail_target)
                 expected_canonical_parent="$(cd /tmp && pwd -P)"
                 ;;
             outside_dir|outside_symlink|outside_dangling_symlink)
@@ -710,8 +773,7 @@ if [ "${1:-}" = "--internal-test-creation-race" ]; then
                 ;;
         esac
         if [ -n "$expected_canonical_parent" ] && [ "$actual_canonical_parent" != "$expected_canonical_parent" ]; then
-            echo "RACE_FIXTURE_VERIFY_FAILED:parent_mismatch:actual=$actual_canonical_parent:expected=$expected_canonical_parent"
-            exit 1
+            safe_cleanup_failed_hook_fixture "$fixture" "parent_mismatch:actual=$actual_canonical_parent:expected=$expected_canonical_parent"
         fi
 
         # 4. A symlink's target relationship is the expected one, including dangling case
@@ -719,29 +781,24 @@ if [ "${1:-}" = "--internal-test-creation-race" ]; then
             local actual_target
             actual_target="$(readlink "$fixture" 2>/dev/null || true)"
             if [ -z "$actual_target" ]; then
-                echo "RACE_FIXTURE_VERIFY_FAILED:readlink_empty:$fixture"
-                exit 1
+                safe_cleanup_failed_hook_fixture "$fixture" "readlink_empty"
             fi
 
             case "$RACE_MODE" in
-                tmp_symlink|outside_symlink)
+                tmp_symlink|outside_symlink|hook_fail_target)
                     if [ "$actual_target" != "$TARGET_PARAM" ]; then
-                        echo "RACE_FIXTURE_VERIFY_FAILED:target_mismatch:actual=$actual_target:expected=$TARGET_PARAM"
-                        exit 1
+                        safe_cleanup_failed_hook_fixture "$fixture" "target_mismatch:actual=$actual_target:expected=$TARGET_PARAM"
                     fi
                     if [ ! -d "$actual_target" ]; then
-                        echo "RACE_FIXTURE_VERIFY_FAILED:target_not_dir:$actual_target"
-                        exit 1
+                        safe_cleanup_failed_hook_fixture "$fixture" "target_not_dir:$actual_target"
                     fi
                     ;;
                 outside_dangling_symlink)
                     if [ "$actual_target" != "$TARGET" ]; then
-                        echo "RACE_FIXTURE_VERIFY_FAILED:target_mismatch:actual=$actual_target:expected=$TARGET"
-                        exit 1
+                        safe_cleanup_failed_hook_fixture "$fixture" "target_mismatch:actual=$actual_target:expected=$TARGET"
                     fi
                     if [ -e "$actual_target" ] || [ -L "$actual_target" ]; then
-                        echo "RACE_FIXTURE_VERIFY_FAILED:dangling_target_exists:$actual_target"
-                        exit 1
+                        safe_cleanup_failed_hook_fixture "$fixture" "dangling_target_exists:$actual_target"
                     fi
                     ;;
             esac
@@ -802,6 +859,15 @@ if [ "${1:-}" = "--internal-test-creation-race" ]; then
                 exit 1
             fi
             create_safe_symlink "/tmp/pipejack-dummy-target-$$" "$TARGET_PARAM" "tmp"
+            ;;
+        hook_fail_target)
+            LINK="/tmp/pipejack-race-link-fail-target-$$"
+            create_safe_symlink "/tmp/deliberate-mismatched-target-$$" "$LINK" "tmp"
+            ;;
+        hook_fail_unverified_pattern)
+            LINK="/tmp/unverified-forbidden-pattern-link-$$"
+            ln -s "/tmp" "$LINK" 2>/dev/null
+            safe_cleanup_failed_hook_fixture "$LINK" "deliberate_pattern_failure"
             ;;
         *)
             echo "[-] Unknown race test mode: $RACE_MODE" >&2
@@ -1894,259 +1960,347 @@ details = []
 
 for mode, sig, exp_rc in race_scenarios:
     scenario_id = f"{mode}_{sig}"
-    errors = []
+    scenario_errors = []
+    cleanup_errors = []
 
     target_dir = None
-    target_dir_stat = None
+    target_dir_baseline = None
     target_sentinel = None
-    target_sentinel_stat = None
-    target_sentinel_hash = None
+    target_sentinel_baseline = None
 
     failed_sentinel = None
-    failed_sentinel_stat = None
-    failed_sentinel_hash = None
+    failed_sentinel_baseline = None
 
-    sentinel_identity_verified = False
-    setup_ok = True
-    setup_err = ""
+    setup_ok = False
+    subprocess_ran = False
 
     try:
-        # 1. Parent-side fixture setup
+        # 1. Early-identity parent fixture setup
         try:
             if mode == "tmp_symlink":
                 target_dir = tempfile.mkdtemp(prefix="pipejack-target-tmp-", dir="/tmp")
                 td_st = os.stat(target_dir)
-                target_dir_stat = (td_st.st_ino, td_st.st_uid, td_st.st_mode)
+                target_dir_baseline = {
+                    "path": target_dir,
+                    "dev": td_st.st_dev,
+                    "ino": td_st.st_ino,
+                    "mode": td_st.st_mode,
+                    "uid": td_st.st_uid,
+                }
 
                 target_sentinel = os.path.join(target_dir, "sentinel.dat")
-                content = f"tmp-target-data-{sig}-{os.getpid()}".encode()
-                with open(target_sentinel, "wb") as f:
-                    f.write(content)
-
-                if not (os.path.isdir(target_dir) and os.path.isfile(target_sentinel)):
-                    raise RuntimeError("target dir/sentinel creation failed")
-                ts_st = os.stat(target_sentinel)
-                target_sentinel_stat = (ts_st.st_ino, ts_st.st_uid, ts_st.st_size, ts_st.st_mtime_ns)
-                target_sentinel_hash = hashlib.sha256(content).hexdigest()
+                fd = os.open(target_sentinel, os.O_CREAT | os.O_WRONLY | os.O_EXCL, 0o600)
+                try:
+                    content = f"tmp-target-data-{sig}-{os.getpid()}".encode()
+                    os.write(fd, content)
+                    os.fsync(fd)
+                    ts_st = os.fstat(fd)
+                    target_sentinel_baseline = {
+                        "path": target_sentinel,
+                        "dev": ts_st.st_dev,
+                        "ino": ts_st.st_ino,
+                        "mode": ts_st.st_mode,
+                        "uid": ts_st.st_uid,
+                        "size": ts_st.st_size,
+                        "mtime_ns": ts_st.st_mtime_ns,
+                        "hash": hashlib.sha256(content).hexdigest(),
+                    }
+                finally:
+                    os.close(fd)
 
             elif mode == "outside_symlink":
                 if not os.path.isdir("/var/tmp") or not os.access("/var/tmp", os.W_OK):
                     raise RuntimeError("/var/tmp not writable")
                 target_dir = tempfile.mkdtemp(prefix="pipejack-target-out-", dir="/var/tmp")
                 td_st = os.stat(target_dir)
-                target_dir_stat = (td_st.st_ino, td_st.st_uid, td_st.st_mode)
+                target_dir_baseline = {
+                    "path": target_dir,
+                    "dev": td_st.st_dev,
+                    "ino": td_st.st_ino,
+                    "mode": td_st.st_mode,
+                    "uid": td_st.st_uid,
+                }
 
                 target_sentinel = os.path.join(target_dir, "sentinel.dat")
-                content = f"out-target-data-{sig}-{os.getpid()}".encode()
-                with open(target_sentinel, "wb") as f:
-                    f.write(content)
-
-                if not (os.path.isdir(target_dir) and os.path.isfile(target_sentinel)):
-                    raise RuntimeError("outside target dir/sentinel creation failed")
-                ts_st = os.stat(target_sentinel)
-                target_sentinel_stat = (ts_st.st_ino, ts_st.st_uid, ts_st.st_size, ts_st.st_mtime_ns)
-                target_sentinel_hash = hashlib.sha256(content).hexdigest()
+                fd = os.open(target_sentinel, os.O_CREAT | os.O_WRONLY | os.O_EXCL, 0o600)
+                try:
+                    content = f"out-target-data-{sig}-{os.getpid()}".encode()
+                    os.write(fd, content)
+                    os.fsync(fd)
+                    ts_st = os.fstat(fd)
+                    target_sentinel_baseline = {
+                        "path": target_sentinel,
+                        "dev": ts_st.st_dev,
+                        "ino": ts_st.st_ino,
+                        "mode": ts_st.st_mode,
+                        "uid": ts_st.st_uid,
+                        "size": ts_st.st_size,
+                        "mtime_ns": ts_st.st_mtime_ns,
+                        "hash": hashlib.sha256(content).hexdigest(),
+                    }
+                finally:
+                    os.close(fd)
 
             elif mode == "failed_creation":
                 fd, failed_sentinel = tempfile.mkstemp(prefix="pipejack-fail-sentinel-", dir="/tmp")
-                content = f"fail-sentinel-data-{sig}-{os.getpid()}".encode()
-                os.write(fd, content)
-                os.close(fd)
-
-                if not os.path.isfile(failed_sentinel):
-                    raise RuntimeError("failed_sentinel creation failed")
-                st = os.stat(failed_sentinel)
-                failed_sentinel_stat = (st.st_ino, st.st_uid, st.st_mode, st.st_size, st.st_mtime_ns)
-                failed_sentinel_hash = hashlib.sha256(content).hexdigest()
+                try:
+                    content = f"fail-sentinel-data-{sig}-{os.getpid()}".encode()
+                    os.write(fd, content)
+                    os.fsync(fd)
+                    fs_st = os.fstat(fd)
+                    failed_sentinel_baseline = {
+                        "path": failed_sentinel,
+                        "dev": fs_st.st_dev,
+                        "ino": fs_st.st_ino,
+                        "mode": fs_st.st_mode,
+                        "uid": fs_st.st_uid,
+                        "size": fs_st.st_size,
+                        "mtime_ns": fs_st.st_mtime_ns,
+                        "hash": hashlib.sha256(content).hexdigest(),
+                    }
+                finally:
+                    os.close(fd)
 
             elif mode in ("outside_dir", "outside_dangling_symlink"):
                 if not os.path.isdir("/var/tmp") or not os.access("/var/tmp", os.W_OK):
                     raise RuntimeError("/var/tmp not writable")
 
+            setup_ok = True
+
         except Exception as e:
             setup_ok = False
-            setup_err = str(e)
-            errors.append(f"Setup failed: {setup_err}")
+            scenario_errors.append(f"Setup failed: {e}")
 
-        if not setup_ok:
-            failed_scenarios.append((scenario_id, f"Setup failed: {setup_err}"))
-            details.append(f"{scenario_id}:SETUP_FAIL({setup_err})")
-            continue
-
-        # 2. Child execution
-        args = ["bash", SCRIPT_FILE, "--internal-test-creation-race", mode, sig]
-        if target_dir:
-            args.append(target_dir)
-        elif failed_sentinel:
-            args.append(failed_sentinel)
-
-        res = subprocess.run(
-            args,
-            capture_output=True,
-            text=True,
-            preexec_fn=lambda: signal.signal(signal.SIGHUP, signal.SIG_DFL)
-        )
-
-        # 3. Output parsing
-        fixture_path = None
-        fixture_type = None
-        fail_hook_fired = False
-        verify_failed_lines = []
-
-        for line in res.stdout.splitlines():
-            if line.startswith("RACE_FIXTURE_CREATED:"):
-                parts = line.split(":", 2)
-                if len(parts) >= 2:
-                    fixture_path = parts[1].strip()
-                if len(parts) >= 3:
-                    fixture_type = parts[2].strip()
-            elif line.startswith("RACE_FAIL_HOOK_FIRED:"):
-                fail_hook_fired = True
-            elif line.startswith("RACE_FIXTURE_VERIFY_FAILED:"):
-                verify_failed_lines.append(line)
-
-        if verify_failed_lines:
-            vf_msg = "; ".join(verify_failed_lines)
-            errors.append(f"race hook verification failed: {vf_msg}")
-
-        if res.returncode != exp_rc:
-            errors.append(f"rc={res.returncode}(expected {exp_rc})")
-        if "SHOULD_NOT_REACH_HERE" in res.stdout:
-            errors.append("reached SHOULD_NOT_REACH_HERE")
-
-        # 4. Assertions
-        if mode == "failed_creation":
-            if not fail_hook_fired:
-                errors.append("fail hook did not fire")
-            if fixture_path is not None:
-                errors.append(f"unexpected fixture created: {fixture_path}")
-
-            # Identity, type, owner, metadata, and content checks
-            all_sentinel_checks_ok = True
-            if not os.path.lexists(failed_sentinel):
-                errors.append("pre-existing sentinel was deleted")
-                all_sentinel_checks_ok = False
-            elif os.path.islink(failed_sentinel):
-                errors.append("pre-existing sentinel turned into symlink")
-                all_sentinel_checks_ok = False
-            elif not os.path.isfile(failed_sentinel):
-                errors.append("pre-existing sentinel is not a regular file")
-                all_sentinel_checks_ok = False
-            else:
-                st = os.stat(failed_sentinel)
-                if st.st_ino != failed_sentinel_stat[0]:
-                    errors.append(f"sentinel inode changed: {st.st_ino} != {failed_sentinel_stat[0]}")
-                    all_sentinel_checks_ok = False
-                if st.st_uid != os.getuid():
-                    errors.append(f"sentinel uid mismatch: {st.st_uid} != {os.getuid()}")
-                    all_sentinel_checks_ok = False
-                if st.st_mode != failed_sentinel_stat[2]:
-                    errors.append(f"sentinel mode changed: {st.st_mode} != {failed_sentinel_stat[2]}")
-                    all_sentinel_checks_ok = False
-                if st.st_size != failed_sentinel_stat[3]:
-                    errors.append(f"sentinel size changed: {st.st_size} != {failed_sentinel_stat[3]}")
-                    all_sentinel_checks_ok = False
-                if st.st_mtime_ns != failed_sentinel_stat[4]:
-                    errors.append(f"sentinel mtime changed: {st.st_mtime_ns} != {failed_sentinel_stat[4]}")
-                    all_sentinel_checks_ok = False
-
-                with open(failed_sentinel, "rb") as f:
-                    cur_hash = hashlib.sha256(f.read()).hexdigest()
-                if cur_hash != failed_sentinel_hash:
-                    errors.append("sentinel content hash modified")
-                    all_sentinel_checks_ok = False
-
-            sentinel_identity_verified = all_sentinel_checks_ok
-
-        else:
-            # Positive fixture creation assertions
-            if not fixture_path:
-                errors.append("missing RACE_FIXTURE_CREATED output")
-            else:
-                canon_parent = os.path.realpath(os.path.dirname(fixture_path))
-                if mode in ("tmp_dir", "tmp_symlink"):
-                    expected_parent = os.path.realpath("/tmp")
-                else:
-                    expected_parent = os.path.realpath("/var/tmp")
-                if canon_parent != expected_parent:
-                    errors.append(f"parent dir mismatch: {canon_parent} != {expected_parent}")
-
-                exp_type = "dir" if mode in ("tmp_dir", "outside_dir") else "symlink"
-                if fixture_type != exp_type:
-                    errors.append(f"fixture type mismatch: {fixture_type} != {exp_type}")
-
-                if os.path.lexists(fixture_path):
-                    errors.append(f"fixture was not cleaned up: {fixture_path}")
-
-            # Target preservation for symlink modes
+        # 2. Child execution (narrowly scoped exception handling)
+        if setup_ok:
+            args = ["bash", SCRIPT_FILE, "--internal-test-creation-race", mode, sig]
             if target_dir:
-                if not os.path.isdir(target_dir) or os.path.islink(target_dir):
-                    errors.append(f"target dir missing or not a directory: {target_dir}")
-                elif not os.path.isfile(target_sentinel) or os.path.islink(target_sentinel):
-                    errors.append(f"target sentinel missing or not a regular file: {target_sentinel}")
-                else:
-                    st_td = os.stat(target_dir)
-                    if st_td.st_ino != target_dir_stat[0] or st_td.st_uid != target_dir_stat[1]:
-                        errors.append("target dir inode or owner mismatch")
+                args.append(target_dir)
+            elif failed_sentinel:
+                args.append(failed_sentinel)
 
-                    st_ts = os.stat(target_sentinel)
-                    if st_ts.st_ino != target_sentinel_stat[0]:
-                        errors.append("target sentinel inode mismatch")
-                    if st_ts.st_size != target_sentinel_stat[2]:
-                        errors.append(f"target sentinel size mismatch: {st_ts.st_size} != {target_sentinel_stat[2]}")
-                    with open(target_sentinel, "rb") as f:
+            try:
+                res = subprocess.run(
+                    args,
+                    capture_output=True,
+                    text=True,
+                    preexec_fn=lambda: signal.signal(signal.SIGHUP, signal.SIG_DFL)
+                )
+                subprocess_ran = True
+            except Exception as e:
+                scenario_errors.append(f"Subprocess launch failed: {e}")
+
+        # 3. Post-child verification
+        if subprocess_ran:
+            fixture_path = None
+            fixture_type = None
+            fail_hook_fired = False
+            verify_failed_lines = []
+
+            for line in res.stdout.splitlines():
+                if line.startswith("RACE_FIXTURE_CREATED:"):
+                    parts = line.split(":", 2)
+                    if len(parts) >= 2:
+                        fixture_path = parts[1].strip()
+                    if len(parts) >= 3:
+                        fixture_type = parts[2].strip()
+                elif line.startswith("RACE_FAIL_HOOK_FIRED:"):
+                    fail_hook_fired = True
+                elif line.startswith("RACE_FIXTURE_VERIFY_FAILED:"):
+                    verify_failed_lines.append(line)
+
+            if verify_failed_lines:
+                vf_msg = "; ".join(verify_failed_lines)
+                scenario_errors.append(f"race hook verification failed: {vf_msg}")
+
+            if res.returncode != exp_rc:
+                scenario_errors.append(f"rc={res.returncode}(expected {exp_rc})")
+            if "SHOULD_NOT_REACH_HERE" in res.stdout:
+                scenario_errors.append("reached SHOULD_NOT_REACH_HERE")
+
+            if mode == "failed_creation":
+                if not fail_hook_fired:
+                    scenario_errors.append("fail hook did not fire")
+                if fixture_path is not None:
+                    scenario_errors.append(f"unexpected fixture created: {fixture_path}")
+
+                if not os.path.lexists(failed_sentinel):
+                    scenario_errors.append("pre-existing sentinel was deleted")
+                elif os.path.islink(failed_sentinel):
+                    scenario_errors.append("pre-existing sentinel turned into symlink")
+                elif not os.path.isfile(failed_sentinel):
+                    scenario_errors.append("pre-existing sentinel is not a regular file")
+                else:
+                    cur_st = os.stat(failed_sentinel)
+                    if cur_st.st_dev != failed_sentinel_baseline["dev"] or cur_st.st_ino != failed_sentinel_baseline["ino"]:
+                        scenario_errors.append("pre-existing sentinel device/inode changed")
+                    if cur_st.st_uid != os.getuid():
+                        scenario_errors.append(f"pre-existing sentinel uid mismatch: {cur_st.st_uid}")
+                    if cur_st.st_mode != failed_sentinel_baseline["mode"]:
+                        scenario_errors.append("pre-existing sentinel mode changed")
+                    if cur_st.st_size != failed_sentinel_baseline["size"]:
+                        scenario_errors.append("pre-existing sentinel size changed")
+                    if cur_st.st_mtime_ns != failed_sentinel_baseline["mtime_ns"]:
+                        scenario_errors.append("pre-existing sentinel mtime changed")
+                    with open(failed_sentinel, "rb") as f:
                         cur_hash = hashlib.sha256(f.read()).hexdigest()
-                    if cur_hash != target_sentinel_hash:
-                        errors.append("target sentinel content modified")
+                    if cur_hash != failed_sentinel_baseline["hash"]:
+                        scenario_errors.append("pre-existing sentinel content modified")
+
+            else:
+                if not fixture_path:
+                    scenario_errors.append("missing RACE_FIXTURE_CREATED output")
+                else:
+                    canon_parent = os.path.realpath(os.path.dirname(fixture_path))
+                    if mode in ("tmp_dir", "tmp_symlink"):
+                        expected_parent = os.path.realpath("/tmp")
+                    else:
+                        expected_parent = os.path.realpath("/var/tmp")
+                    if canon_parent != expected_parent:
+                        scenario_errors.append(f"parent dir mismatch: {canon_parent} != {expected_parent}")
+
+                    exp_type = "dir" if mode in ("tmp_dir", "outside_dir") else "symlink"
+                    if fixture_type != exp_type:
+                        scenario_errors.append(f"fixture type mismatch: {fixture_type} != {exp_type}")
+
+                    if os.path.lexists(fixture_path):
+                        scenario_errors.append(f"fixture was not cleaned up: {fixture_path}")
+
+                if target_dir:
+                    if not os.path.isdir(target_dir) or os.path.islink(target_dir):
+                        scenario_errors.append(f"target dir missing or not a directory: {target_dir}")
+                    elif not os.path.isfile(target_sentinel) or os.path.islink(target_sentinel):
+                        scenario_errors.append(f"target sentinel missing or not a regular file: {target_sentinel}")
+                    else:
+                        st_td = os.stat(target_dir)
+                        if st_td.st_dev != target_dir_baseline["dev"] or st_td.st_ino != target_dir_baseline["ino"]:
+                            scenario_errors.append("target dir device/inode mismatch")
+                        st_ts = os.stat(target_sentinel)
+                        if st_ts.st_dev != target_sentinel_baseline["dev"] or st_ts.st_ino != target_sentinel_baseline["ino"]:
+                            scenario_errors.append("target sentinel device/inode mismatch")
+                        if st_ts.st_size != target_sentinel_baseline["size"]:
+                            scenario_errors.append(f"target sentinel size mismatch: {st_ts.st_size} != {target_sentinel_baseline['size']}")
+                        with open(target_sentinel, "rb") as f:
+                            cur_hash = hashlib.sha256(f.read()).hexdigest()
+                        if cur_hash != target_sentinel_baseline["hash"]:
+                            scenario_errors.append("target sentinel content modified")
 
     finally:
-        # 5. Guaranteed cleanup on normal exit, failure, or setup exception
-        # Failed-creation sentinel cleanup: conditional strictly on identity verification
+        # 4. Independent baseline revalidation and validated cleanup
         if failed_sentinel is not None:
-            if sentinel_identity_verified and os.path.lexists(failed_sentinel):
-                try:
-                    st = os.stat(failed_sentinel)
-                    if (not os.path.islink(failed_sentinel) and
-                        os.path.isfile(failed_sentinel) and
-                        st.st_uid == os.getuid() and
-                        st.st_ino == failed_sentinel_stat[0]):
+            if not os.path.lexists(failed_sentinel):
+                if failed_sentinel_baseline is not None:
+                    cleanup_errors.append(f"failed_sentinel {failed_sentinel} was deleted before cleanup")
+            elif failed_sentinel_baseline is None:
+                cleanup_errors.append(f"failed_sentinel baseline unrecorded: preserving {failed_sentinel}")
+            else:
+                mismatch_reasons = []
+                if os.path.islink(failed_sentinel):
+                    mismatch_reasons.append("is symlink")
+                elif not os.path.isfile(failed_sentinel):
+                    mismatch_reasons.append("not regular file")
+                else:
+                    try:
+                        cur_st = os.stat(failed_sentinel)
+                        if cur_st.st_uid != os.getuid():
+                            mismatch_reasons.append(f"uid mismatch {cur_st.st_uid}")
+                        if cur_st.st_dev != failed_sentinel_baseline["dev"] or cur_st.st_ino != failed_sentinel_baseline["ino"]:
+                            mismatch_reasons.append("dev/ino changed")
+                        if cur_st.st_mode != failed_sentinel_baseline["mode"]:
+                            mismatch_reasons.append("mode changed")
+                        if cur_st.st_size != failed_sentinel_baseline["size"]:
+                            mismatch_reasons.append("size changed")
+                        if cur_st.st_mtime_ns != failed_sentinel_baseline["mtime_ns"]:
+                            mismatch_reasons.append("mtime changed")
+                        with open(failed_sentinel, "rb") as f:
+                            cur_h = hashlib.sha256(f.read()).hexdigest()
+                        if cur_h != failed_sentinel_baseline["hash"]:
+                            mismatch_reasons.append("content hash changed")
+                    except Exception as e:
+                        mismatch_reasons.append(f"stat/read error: {e}")
+
+                if not mismatch_reasons:
+                    try:
                         os.unlink(failed_sentinel)
-                    else:
-                        errors.append(f"sentinel final identity check failed on cleanup: preserving {failed_sentinel}")
-                except Exception as ce:
-                    errors.append(f"cleanup error on sentinel: {ce}")
-            elif not sentinel_identity_verified and os.path.lexists(failed_sentinel):
-                errors.append(f"sentinel identity verification failed: preserved path {failed_sentinel} for investigation")
-
-        # Symlink target sentinel and directory cleanup: strictly validated identity
-        if target_sentinel is not None and os.path.lexists(target_sentinel):
-            try:
-                st_ts = os.stat(target_sentinel)
-                if (not os.path.islink(target_sentinel) and
-                    os.path.isfile(target_sentinel) and
-                    st_ts.st_uid == os.getuid() and
-                    st_ts.st_ino == target_sentinel_stat[0]):
-                    os.unlink(target_sentinel)
+                    except Exception as e:
+                        cleanup_errors.append(f"failed to unlink {failed_sentinel}: {e}")
                 else:
-                    errors.append(f"target sentinel identity check failed on cleanup: preserving {target_sentinel}")
-            except Exception as ce:
-                errors.append(f"cleanup error on target sentinel: {ce}")
+                    reasons_str = "; ".join(mismatch_reasons)
+                    cleanup_errors.append(f"failed_sentinel identity mismatch ({reasons_str}): preserving {failed_sentinel}")
 
-        if target_dir is not None and os.path.lexists(target_dir):
-            try:
-                st_td = os.stat(target_dir)
-                if (not os.path.islink(target_dir) and
-                    os.path.isdir(target_dir) and
-                    st_td.st_uid == os.getuid() and
-                    st_td.st_ino == target_dir_stat[0]):
-                    os.rmdir(target_dir)
+        sentinel_cleaned = False
+        if target_sentinel is not None:
+            if not os.path.lexists(target_sentinel):
+                sentinel_cleaned = True
+            elif target_sentinel_baseline is None:
+                cleanup_errors.append(f"target_sentinel baseline unrecorded: preserving {target_sentinel}")
+            else:
+                mismatch_reasons = []
+                if os.path.islink(target_sentinel):
+                    mismatch_reasons.append("is symlink")
+                elif not os.path.isfile(target_sentinel):
+                    mismatch_reasons.append("not regular file")
                 else:
-                    errors.append(f"target dir identity check failed on cleanup: preserving {target_dir}")
-            except Exception as ce:
-                errors.append(f"cleanup error on target dir: {ce}")
+                    try:
+                        cur_st = os.stat(target_sentinel)
+                        if cur_st.st_uid != os.getuid():
+                            mismatch_reasons.append(f"uid mismatch {cur_st.st_uid}")
+                        if cur_st.st_dev != target_sentinel_baseline["dev"] or cur_st.st_ino != target_sentinel_baseline["ino"]:
+                            mismatch_reasons.append("dev/ino changed")
+                        if cur_st.st_size != target_sentinel_baseline["size"]:
+                            mismatch_reasons.append("size changed")
+                    except Exception as e:
+                        mismatch_reasons.append(f"stat error: {e}")
 
-    if errors:
-        err_msg = ", ".join(errors)
+                if not mismatch_reasons:
+                    try:
+                        os.unlink(target_sentinel)
+                        sentinel_cleaned = True
+                    except Exception as e:
+                        cleanup_errors.append(f"failed to unlink {target_sentinel}: {e}")
+                else:
+                    reasons_str = "; ".join(mismatch_reasons)
+                    cleanup_errors.append(f"target_sentinel identity mismatch ({reasons_str}): preserving {target_sentinel}")
+
+        if target_dir is not None:
+            if not os.path.lexists(target_dir):
+                pass
+            elif target_dir_baseline is None:
+                cleanup_errors.append(f"target_dir baseline unrecorded: preserving {target_dir}")
+            elif not sentinel_cleaned and target_sentinel is not None and os.path.lexists(target_sentinel):
+                cleanup_errors.append(f"target_dir {target_dir} preserved because sentinel could not be cleaned")
+            else:
+                mismatch_reasons = []
+                if os.path.islink(target_dir):
+                    mismatch_reasons.append("is symlink")
+                elif not os.path.isdir(target_dir):
+                    mismatch_reasons.append("not a directory")
+                else:
+                    try:
+                        cur_st = os.stat(target_dir)
+                        if cur_st.st_uid != os.getuid():
+                            mismatch_reasons.append(f"uid mismatch {cur_st.st_uid}")
+                        if cur_st.st_dev != target_dir_baseline["dev"] or cur_st.st_ino != target_dir_baseline["ino"]:
+                            mismatch_reasons.append("dev/ino changed")
+                    except Exception as e:
+                        mismatch_reasons.append(f"stat error: {e}")
+
+                if not mismatch_reasons:
+                    try:
+                        os.rmdir(target_dir)
+                    except Exception as e:
+                        cleanup_errors.append(f"failed to rmdir {target_dir}: {e}")
+                else:
+                    reasons_str = "; ".join(mismatch_reasons)
+                    cleanup_errors.append(f"target_dir identity mismatch ({reasons_str}): preserving {target_dir}")
+
+    # Combine scenario errors and cleanup errors
+    all_case_errors = list(scenario_errors)
+    if cleanup_errors:
+        all_case_errors.extend([f"CLEANUP_FAIL({ce})" for ce in cleanup_errors])
+
+    if all_case_errors:
+        err_msg = ", ".join(all_case_errors)
         failed_scenarios.append((scenario_id, err_msg))
         details.append(f"{scenario_id}:FAIL({err_msg})")
     else:
@@ -2193,6 +2347,259 @@ print(summary + "|" + "; ".join(details))
 if ! echo "$RACE_OUTPUT" | grep -q "^STATUS:PASS"; then
     TRAP_SAFETY_OK=0
     echo "  [-] Creation-registration race regression tests failed: $RACE_OUTPUT" >&2
+fi
+
+# 5. Subtest D: Controlled Failure-Path & Fault-Injection Regression Tests
+FAULT_OUTPUT=$(python3 -c '
+import subprocess, os, signal, tempfile, hashlib, sys
+
+SCRIPT_FILE = sys.argv[1]
+all_fault_tests_ok = True
+fault_details = []
+
+def run_fault_case(name, fn):
+    global all_fault_tests_ok
+    try:
+        ok, msg = fn()
+        if ok:
+            fault_details.append(f"{name}:PASS")
+        else:
+            all_fault_tests_ok = False
+            fault_details.append(f"{name}:FAIL({msg})")
+    except Exception as e:
+        all_fault_tests_ok = False
+        fault_details.append(f"{name}:EXCEPTION({e})")
+
+# Fault 1: Setup exception after creating target directory
+def test_setup_exception_after_target_dir():
+    target_dir = None
+    target_dir_baseline = None
+    cleanup_errors = []
+    try:
+        target_dir = tempfile.mkdtemp(prefix="pipejack-fault-td-", dir="/tmp")
+        st = os.stat(target_dir)
+        target_dir_baseline = {"path": target_dir, "dev": st.st_dev, "ino": st.st_ino, "uid": st.st_uid}
+        raise RuntimeError("injected setup exception after target dir creation")
+    except RuntimeError:
+        pass
+    finally:
+        if target_dir is not None and os.path.lexists(target_dir):
+            st = os.stat(target_dir)
+            if (not os.path.islink(target_dir) and os.path.isdir(target_dir) and
+                st.st_uid == os.getuid() and st.st_dev == target_dir_baseline["dev"] and
+                st.st_ino == target_dir_baseline["ino"]):
+                os.rmdir(target_dir)
+            else:
+                cleanup_errors.append(f"preserving {target_dir}")
+    
+    if os.path.lexists(target_dir):
+        return False, f"target_dir {target_dir} was not cleaned up after setup exception"
+    if cleanup_errors:
+        return False, f"unexpected cleanup error: {cleanup_errors}"
+    return True, "cleaned"
+
+# Fault 2: Exception during sentinel writing or before identity recording completes
+def test_exception_before_sentinel_identity_recorded():
+    target_dir = tempfile.mkdtemp(prefix="pipejack-fault-unrec-", dir="/tmp")
+    td_st = os.stat(target_dir)
+    target_dir_baseline = {"path": target_dir, "dev": td_st.st_dev, "ino": td_st.st_ino, "uid": td_st.st_uid}
+    
+    target_sentinel = os.path.join(target_dir, "sentinel.dat")
+    with open(target_sentinel, "w") as f:
+        f.write("partial")
+    
+    target_sentinel_baseline = None
+    cleanup_errors = []
+    
+    try:
+        pass
+    finally:
+        sentinel_cleaned = False
+        if target_sentinel is not None:
+            if not os.path.lexists(target_sentinel):
+                sentinel_cleaned = True
+            elif target_sentinel_baseline is None:
+                cleanup_errors.append(f"target_sentinel baseline unrecorded: preserving {target_sentinel}")
+            else:
+                os.unlink(target_sentinel)
+                sentinel_cleaned = True
+
+        if target_dir is not None:
+            if not sentinel_cleaned and os.path.lexists(target_sentinel):
+                cleanup_errors.append(f"target_dir {target_dir} preserved because sentinel could not be cleaned")
+            elif os.path.lexists(target_dir):
+                os.rmdir(target_dir)
+
+    preserved = os.path.lexists(target_sentinel)
+    reported = any("baseline unrecorded: preserving" in ce for ce in cleanup_errors)
+    
+    if os.path.lexists(target_sentinel):
+        os.unlink(target_sentinel)
+    if os.path.lexists(target_dir):
+        os.rmdir(target_dir)
+        
+    if not preserved:
+        return False, "unrecorded sentinel was deleted blindly"
+    if not reported:
+        return False, f"cleanup failure was not reported: {cleanup_errors}"
+    return True, "preserved_and_reported"
+
+# Fault 3: Mocked subprocess-launch exception
+def test_mocked_subprocess_launch_exception():
+    fd, failed_sentinel = tempfile.mkstemp(prefix="pipejack-fault-launch-", dir="/tmp")
+    try:
+        content = b"launch-fail-test-data"
+        os.write(fd, content)
+        os.fsync(fd)
+        st = os.fstat(fd)
+        failed_sentinel_baseline = {
+            "path": failed_sentinel, "dev": st.st_dev, "ino": st.st_ino,
+            "mode": st.st_mode, "uid": st.st_uid, "size": st.st_size,
+            "mtime_ns": st.st_mtime_ns, "hash": hashlib.sha256(content).hexdigest()
+        }
+    finally:
+        os.close(fd)
+
+    scenario_errors = []
+    cleanup_errors = []
+    
+    try:
+        raise OSError("Mocked execve failure: [Errno 8] Exec format error")
+    except Exception as e:
+        scenario_errors.append(f"Subprocess launch failed: {e}")
+    finally:
+        if failed_sentinel_baseline is not None and os.path.lexists(failed_sentinel):
+            cur_st = os.stat(failed_sentinel)
+            if (not os.path.islink(failed_sentinel) and os.path.isfile(failed_sentinel) and
+                cur_st.st_uid == os.getuid() and cur_st.st_dev == failed_sentinel_baseline["dev"] and
+                cur_st.st_ino == failed_sentinel_baseline["ino"] and
+                cur_st.st_size == failed_sentinel_baseline["size"]):
+                os.unlink(failed_sentinel)
+            else:
+                cleanup_errors.append(f"preserving {failed_sentinel}")
+
+    cleaned = not os.path.lexists(failed_sentinel)
+    reported = any("Subprocess launch failed" in se for se in scenario_errors)
+    if not cleaned:
+        return False, "sentinel was not cleaned up after launch failure"
+    if not reported:
+        return False, "launch exception was not recorded in scenario errors"
+    return True, "cleaned_and_reported"
+
+# Fault 4: Sentinel metadata, type, ownership, or content mismatch
+def test_sentinel_content_mismatch_preservation():
+    fd, failed_sentinel = tempfile.mkstemp(prefix="pipejack-fault-mismatch-", dir="/tmp")
+    try:
+        content = b"original-content"
+        os.write(fd, content)
+        os.fsync(fd)
+        st = os.fstat(fd)
+        failed_sentinel_baseline = {
+            "path": failed_sentinel, "dev": st.st_dev, "ino": st.st_ino,
+            "mode": st.st_mode, "uid": st.st_uid, "size": st.st_size,
+            "mtime_ns": st.st_mtime_ns, "hash": hashlib.sha256(content).hexdigest()
+        }
+    finally:
+        os.close(fd)
+
+    with open(failed_sentinel, "ab") as f:
+        f.write(b"-TAMPERED")
+
+    cleanup_errors = []
+    try:
+        pass
+    finally:
+        cur_st = os.stat(failed_sentinel)
+        with open(failed_sentinel, "rb") as f:
+            cur_h = hashlib.sha256(f.read()).hexdigest()
+        mismatches = []
+        if cur_h != failed_sentinel_baseline["hash"]:
+            mismatches.append("content hash changed")
+        if cur_st.st_size != failed_sentinel_baseline["size"]:
+            mismatches.append("size changed")
+        
+        if mismatches:
+            reasons_str = "; ".join(mismatches)
+            cleanup_errors.append(f"failed_sentinel identity mismatch ({reasons_str}): preserving {failed_sentinel}")
+        else:
+            os.unlink(failed_sentinel)
+
+    preserved = os.path.lexists(failed_sentinel)
+    reported = any("identity mismatch" in ce for ce in cleanup_errors)
+    
+    if os.path.lexists(failed_sentinel):
+        os.unlink(failed_sentinel)
+
+    if not preserved:
+        return False, "tampered sentinel was deleted instead of preserved"
+    if not reported:
+        return False, f"identity mismatch cleanup failure was not reported: {cleanup_errors}"
+    return True, "preserved_and_reported"
+
+# Fault 5: Race-hook type or target verification failure
+def test_race_hook_target_verification_failure():
+    target_dir = tempfile.mkdtemp(prefix="pipejack-fault-hook-", dir="/tmp")
+    try:
+        res = subprocess.run(
+            ["bash", SCRIPT_FILE, "--internal-test-creation-race", "hook_fail_target", "INT", target_dir],
+            capture_output=True,
+            text=True
+        )
+    finally:
+        if os.path.lexists(target_dir):
+            os.rmdir(target_dir)
+
+    verify_failed = ("RACE_FIXTURE_VERIFY_FAILED:" in res.stdout and "target_mismatch" in res.stdout)
+    rc_failed = (res.returncode == 1)
+    cleaned = ("RACE_FAILED_FIXTURE_CLEANED:" in res.stdout)
+    
+    if not verify_failed:
+        return False, f"missing RACE_FIXTURE_VERIFY_FAILED: stdout={res.stdout}"
+    if not rc_failed:
+        return False, f"child returncode was {res.returncode}, expected 1"
+    if not cleaned:
+        return False, f"failed hook fixture was not cleaned up: stdout={res.stdout}"
+    return True, "verified_and_cleaned"
+
+# Fault 6: Race-hook unverified pattern preservation
+def test_race_hook_unverified_pattern_preservation():
+    res = subprocess.run(
+        ["bash", SCRIPT_FILE, "--internal-test-creation-race", "hook_fail_unverified_pattern", "INT"],
+        capture_output=True,
+        text=True
+    )
+    verify_failed = ("RACE_FIXTURE_VERIFY_FAILED:" in res.stdout)
+    preserved_reported = ("RACE_FIXTURE_PRESERVED:" in res.stdout and "unexpected_basename_pattern" in res.stdout)
+    
+    for line in res.stdout.splitlines():
+        if "RACE_FIXTURE_PRESERVED:path=" in line:
+            parts = line.split(":")
+            for p in parts:
+                if p.startswith("path="):
+                    p_path = p.split("=", 1)[1]
+                    if os.path.lexists(p_path):
+                        os.unlink(p_path)
+
+    if not verify_failed:
+        return False, f"missing verify failed: stdout={res.stdout}"
+    if not preserved_reported:
+        return False, f"unverified pattern residue was not preserved/reported: stdout={res.stdout}"
+    return True, "preserved_and_reported"
+
+run_fault_case("setup_exception_cleanup", test_setup_exception_after_target_dir)
+run_fault_case("unrecorded_sentinel_preservation", test_exception_before_sentinel_identity_recorded)
+run_fault_case("mocked_launch_exception_cleanup", test_mocked_subprocess_launch_exception)
+run_fault_case("tampered_sentinel_preservation", test_sentinel_content_mismatch_preservation)
+run_fault_case("race_hook_target_verification_failure", test_race_hook_target_verification_failure)
+run_fault_case("race_hook_unverified_pattern_preservation", test_race_hook_unverified_pattern_preservation)
+
+status = "PASS" if all_fault_tests_ok else "FAIL"
+print(f"STATUS:{status}|" + "; ".join(fault_details))
+' "$SCRIPT_FILE" 2>&1)
+
+if ! echo "$FAULT_OUTPUT" | grep -q "^STATUS:PASS"; then
+    TRAP_SAFETY_OK=0
+    echo "  [-] Failure-path and fault-injection regression tests failed: $FAULT_OUTPUT" >&2
 fi
 
 # Clean up sentinel directory safely via safe_delete_path
