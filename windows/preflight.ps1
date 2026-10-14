@@ -109,7 +109,7 @@ function Test-RemoteHost {
     )
     Write-Host "`n[+] Verifying SSH Access and Environment on $NodeName ($IP)..."
     $Target = "$SSHUser@$IP"
-    $Cmd = "uname -s -m && cat /etc/os-release | grep PRETTY_NAME && df -h / | tail -1"
+    $Cmd = "uname -s -m && cat /etc/os-release | grep PRETTY_NAME && df -h / | tail -1 && (sudo -n true 2>/dev/null && echo 'SUDO_STATUS: PASSWORDLESS' || echo 'SUDO_STATUS: PASSWORD_REQUIRED')"
     $CommonArgs = @(
         "-p", [string]$SSHPort,
         "-o", "BatchMode=yes",
@@ -123,7 +123,11 @@ function Test-RemoteHost {
     if ($exitCode -eq 0) {
         Write-Host "  [OK] SSH authentication succeeded for $Target" -ForegroundColor Green
         foreach ($l in $output) {
-            Write-Host "       $l" -ForegroundColor Gray
+            if ($l -match "SUDO_STATUS: PASSWORD_REQUIRED") {
+                Write-Host "       $l" -ForegroundColor Yellow
+            } else {
+                Write-Host "       $l" -ForegroundColor Gray
+            }
         }
         return $true
     } else {
@@ -141,6 +145,8 @@ $VM2_OK = Test-RemoteHost -NodeName "VM2 (Orchestrator)" -IP $VM2_IP
 Write-Host "`n============================================================" -ForegroundColor Cyan
 if ($VM1_OK -and $VM2_OK) {
     Write-Host " PREFLIGHT PASSED: Both VMs are reachable and ready for deployment." -ForegroundColor Green
+    Write-Host " Sudo Notice: If PASSWORD_REQUIRED was reported, run setup-pipejack.ps1 with -InteractiveSudo" -ForegroundColor Yellow
+    Write-Host "              or configure passwordless sudo on the VMs." -ForegroundColor Yellow
     Write-Host " Run .\setup-pipejack.ps1 to proceed with installation." -ForegroundColor Cyan
     Write-Host "============================================================" -ForegroundColor Cyan
     exit 0

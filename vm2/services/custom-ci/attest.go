@@ -34,29 +34,37 @@ const (
 	attestIndexPath = "/home/ubuntu/pipejack-attestations/index.json"
 )
 
+func getKeyPath() string {
+	if p := os.Getenv("PIPEJACK_KEY_PATH"); p != "" {
+		return p
+	}
+	return attestKeyPath
+}
+
 func loadOrCreateKey() (ed25519.PrivateKey, error) {
-	if data, err := os.ReadFile(attestKeyPath); err == nil {
+	keyPath := getKeyPath()
+	if data, err := os.ReadFile(keyPath); err == nil {
 		if len(data) == ed25519.PrivateKeySize {
 			priv := ed25519.PrivateKey(data)
 			pub := priv.Public().(ed25519.PublicKey)
-			if pubData, err := os.ReadFile(attestKeyPath + ".pub"); err != nil || len(pubData) == 0 {
-				_ = os.WriteFile(attestKeyPath+".pub", []byte(hex.EncodeToString(pub)), 0644)
+			if pubData, err := os.ReadFile(keyPath + ".pub"); err != nil || len(pubData) == 0 {
+				_ = os.WriteFile(keyPath+".pub", []byte(hex.EncodeToString(pub)), 0644)
 			}
 			return priv, nil
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(attestKeyPath), 0700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(keyPath), 0700); err != nil {
 		return nil, err
 	}
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(attestKeyPath, priv, 0600); err != nil {
+	if err := os.WriteFile(keyPath, priv, 0600); err != nil {
 		return nil, err
 	}
 	pub := priv.Public().(ed25519.PublicKey)
-	if err := os.WriteFile(attestKeyPath+".pub", []byte(hex.EncodeToString(pub)), 0644); err != nil {
+	if err := os.WriteFile(keyPath+".pub", []byte(hex.EncodeToString(pub)), 0644); err != nil {
 		return nil, err
 	}
 	return priv, nil

@@ -26,6 +26,7 @@ import hashlib
 import shutil
 import signal
 import socket
+import ipaddress
 import random
 from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -103,7 +104,57 @@ def set_pty_size(fd, rows, cols):
 BUILD_JOBS = {}
 BUILD_JOBS_LOCK = threading.Lock()
 
-PORT = 8090
+HOST = os.environ.get("PIPEJACK_CONSOLE_HOST", "0.0.0.0")
+PORT = int(os.environ.get("PIPEJACK_CONSOLE_PORT", "8090"))
+DEFAULT_ALLOWED_NETWORKS = "127.0.0.0/8,192.168.88.0/24,192.168.152.0/24,::1/128"
+
+def get_allowed_networks():
+    raw = os.environ.get("PIPEJACK_ALLOWED_NETWORKS", DEFAULT_ALLOWED_NETWORKS).strip()
+    if raw == "*":
+        return None
+    networks = []
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(item, strict=False))
+        except ValueError:
+            pass
+    return networks
+
+def is_client_allowed(client_ip):
+    networks = get_allowed_networks()
+    if networks is None:
+        return True
+    try:
+        ip = ipaddress.ip_address(client_ip)
+        return any(ip in net for net in networks)
+    except ValueError:
+        return False
+
+def is_origin_allowed(origin_str, host_header):
+    if not origin_str:
+        return True
+    try:
+        parsed = urlparse(origin_str)
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+        if hostname in ("localhost", "127.0.0.1", "::1"):
+            return True
+        if host_header:
+            host_only = host_header.split(":")[0].strip()
+            if hostname.lower() == host_only.lower():
+                return True
+        try:
+            ip = ipaddress.ip_address(hostname)
+            return is_client_allowed(hostname)
+        except ValueError:
+            pass
+        return False
+    except Exception:
+        return False
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 ARTIFACTS_DIR = os.path.join(BASE_DIR, "artifacts")
@@ -456,8 +507,23 @@ def get_system_status():
 
 def upload_tarball_to_ci(tar_path):
     """Upload tarball directly to PipeJack CI daemon using multipart form-data."""
-    boundary = f"----PipeJackConsoleBoundary{int(time.time()*1000)}"
     filename = os.path.basename(tar_path)
+    if not os.path.exists(tar_path):
+        return {
+            "http_status": 404,
+            "pipejack_verdict": "ERROR",
+            "status": "error",
+            "build_id": "",
+            "tag": "",
+            "image": "",
+            "error": f"Scenario archive '{filename}' not found at {tar_path}. Run prepare-demo.sh to generate artifacts.",
+            "duration_ms": 0,
+            "ci_response": {"error": f"Scenario archive '{filename}' not found. Run prepare-demo.sh to generate demo artifacts.", "verdict": "ERROR"},
+            "diagnostics": None,
+            "attestation": None
+        }
+
+    boundary = f"----PipeJackConsoleBoundary{int(time.time()*1000)}"
     with open(tar_path, 'rb') as f:
         file_bytes = f.read()
 
@@ -1693,6 +1759,20 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
         super().end_headers()
 
     def handle_terminal_websocket(self, vm_key):
+        client_ip = self.client_address[0]
+        if not is_client_allowed(client_ip):
+            self.log_message("[SECURITY] Terminal WebSocket rejected: client IP %s not in allowed networks", client_ip)
+            self.send_error_json(403, f"Access denied: Client IP '{client_ip}' is not permitted to access terminal interface.")
+            self.close_connection = True
+            return
+
+        origin = self.headers.get("Origin")
+        if origin and not is_origin_allowed(origin, self.headers.get("Host", "")):
+            self.log_message("[SECURITY] Terminal WebSocket rejected: origin %s disallowed for Host %s", origin, self.headers.get("Host", ""))
+            self.send_error_json(403, f"Access denied: WebSocket Origin '{origin}' is not permitted.")
+            self.close_connection = True
+            return
+
         key = self.headers.get("Sec-WebSocket-Key", "")
         if not key:
             self.send_error_json(400, "Missing Sec-WebSocket-Key")
@@ -1932,6 +2012,18 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
             self.send_json(run_sast_scan(scen))
         elif path == "/api/status":
             self.send_json(get_system_status())
+        elif path == "/api/terminal/access-check":
+            client_ip = self.client_address[0]
+            allowed = is_client_allowed(client_ip)
+            nets = get_allowed_networks()
+            nets_str = [str(n) for n in nets] if nets is not None else ["*"]
+            self.send_json({
+                "client_ip": client_ip,
+                "terminal_access_allowed": allowed,
+                "allowed_networks": nets_str,
+                "bind_host": HOST,
+                "bind_port": PORT
+            })
         elif path == "/api/scenarios":
             self.send_json(SCENARIO_MAP)
         elif path == "/api/attestations":
@@ -2213,12 +2305,13 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
 
 
 def run_server():
-    server_address = ("0.0.0.0", PORT)
+    server_address = (HOST, PORT)
     httpd = ThreadingHTTPServer(server_address, ConsoleRequestHandler)
     print("=" * 60)
     print(f" PIPEJACK BUILD SECURITY CONSOLE RUNNING")
-    print(f" Access URL: http://192.168.88.133:{PORT}")
-    print(f" CI Backend: {CI_URL}")
+    print(f" Bind Address: {HOST}:{PORT}")
+    print(f" Allowed Terminal Networks: {os.environ.get('PIPEJACK_ALLOWED_NETWORKS', DEFAULT_ALLOWED_NETWORKS)}")
+    print(f" CI Backend:   {CI_URL}")
     print("=" * 60)
     try:
         httpd.serve_forever()

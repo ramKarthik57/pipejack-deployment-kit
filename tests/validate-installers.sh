@@ -4,6 +4,9 @@
 
 set -euo pipefail
 
+export PATH="$HOME/.local/bin:$PATH"
+export PYTHONDONTWRITEBYTECODE=1
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 

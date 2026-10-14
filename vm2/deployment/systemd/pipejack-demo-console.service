@@ -15,6 +15,11 @@ RestartSec=3
 StandardOutput=append:/home/ubuntu/pipejack-demo-console/console.log
 StandardError=append:/home/ubuntu/pipejack-demo-console/console.log
 
+# Environment configuration
+Environment=PIPEJACK_CONSOLE_HOST=0.0.0.0
+Environment=PIPEJACK_CONSOLE_PORT=8090
+Environment=PIPEJACK_ALLOWED_NETWORKS=127.0.0.0/8,192.168.88.0/24,192.168.152.0/24,::1/128
+
 # Resource and environment limits
 LimitNOFILE=65535
 

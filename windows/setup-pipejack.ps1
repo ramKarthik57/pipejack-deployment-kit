@@ -51,6 +51,10 @@
 .PARAMETER SkipVerify
     Skip post-deployment verification.
 
+.PARAMETER InteractiveSudo
+    Allocates an interactive pseudo-terminal (ssh -t) during installer execution
+    to allow entering a sudo password interactively when passwordless sudo is not configured.
+
 .PARAMETER Force
     Bypass interactive deployment confirmation.
 #>
@@ -68,6 +72,7 @@ param(
     [switch]$SkipVM2,
     [switch]$SkipPreflight,
     [switch]$SkipVerify,
+    [switch]$InteractiveSudo,
     [switch]$Force
 )
 
@@ -82,10 +87,14 @@ Write-Host "============================================================" -Foreg
 if (-not $KitDir) {
     $KitDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 }
+
+$ModeString = if ($DryRun) { 'DRY-RUN / PREVIEW (NON-MODIFYING)' } else { 'LIVE DEPLOYMENT' }
+
 Write-Host "[+] Local Kit Root: $KitDir"
 Write-Host "    Target VM1 (Client):       $SSHUser@$VM1_IP"
 Write-Host "    Target VM2 (Orchestrator): $SSHUser@$VM2_IP"
-Write-Host "    Mode:                      $($DryRun ? 'DRY-RUN / PREVIEW (NON-MODIFYING)' : 'LIVE DEPLOYMENT')"
+Write-Host "    Mode:                      $ModeString"
+Write-Host "    Interactive Sudo:          $([string]$InteractiveSudo)"
 
 # 2. Preflight Check (Read-only connectivity and environment inspection)
 if (-not $SkipPreflight) {
@@ -170,16 +179,23 @@ function Invoke-RemoteCommand {
     param(
         [string]$IP,
         [string]$Command,
-        [string]$Description
+        [string]$Description,
+        [switch]$Interactive
     )
     Write-Host "`n[+] $Description on $IP..." -ForegroundColor Cyan
     $Target = "$SSHUser@$IP"
     $CommonArgs = @(
         "-p", [string]$SSHPort,
-        "-o", "BatchMode=yes",
         "-o", "ConnectTimeout=10",
         "-o", "StrictHostKeyChecking=accept-new"
-    ) + $SSHKeyArgs + @($Target, $Command)
+    )
+    if ($Interactive -or $InteractiveSudo) {
+        $CommonArgs += @("-t")
+    } else {
+        $CommonArgs += @("-o", "BatchMode=yes")
+    }
+
+    $CommonArgs += $SSHKeyArgs + @($Target, $Command)
 
     & "ssh.exe" @CommonArgs
     $code = $LASTEXITCODE
@@ -188,6 +204,27 @@ function Invoke-RemoteCommand {
         throw "Remote command execution failed on $IP with exit code $code"
     }
     Write-Host "  [OK] $Description succeeded." -ForegroundColor Green
+}
+
+function Test-RemoteSudo {
+    param(
+        [string]$IP
+    )
+    $Target = "$SSHUser@$IP"
+    $TestCmd = "sudo -n true 2>/dev/null"
+    $CommonArgs = @(
+        "-p", [string]$SSHPort,
+        "-o", "BatchMode=yes",
+        "-o", "ConnectTimeout=5",
+        "-o", "StrictHostKeyChecking=accept-new"
+    )
+    if ($SSHKey -and (Test-Path $SSHKey)) {
+        $CommonArgs += @("-i", $SSHKey)
+    }
+    $CommonArgs += @($Target, $TestCmd)
+
+    & "ssh.exe" @CommonArgs 2>&1 | Out-Null
+    return ($LASTEXITCODE -eq 0)
 }
 
 function Send-RemotePackage {
@@ -245,11 +282,26 @@ try {
         Write-Host " PHASE 1: DEPLOYING VM2 (ORCHESTRATOR & CI SERVER)" -ForegroundColor Cyan
         Write-Host "============================================================" -ForegroundColor Cyan
 
+        # Validate privilege escalation requirement before initiating transfer
+        $vm2SudoOk = Test-RemoteSudo -IP $VM2_IP
+        if (-not $vm2SudoOk) {
+            if (-not $InteractiveSudo) {
+                Write-Host "`n[-] PREFLIGHT PRIVILEGE ERROR: Remote user '$SSHUser' on $VM2_IP requires interactive password authentication for sudo." -ForegroundColor Red
+                Write-Host "    Deployment requires elevated privileges. Either:" -ForegroundColor Yellow
+                Write-Host "    1. Configure passwordless sudo on ${VM2_IP}:" -ForegroundColor Gray
+                Write-Host "       echo '$SSHUser ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/99-pipejack" -ForegroundColor Gray
+                Write-Host "    2. Run setup-pipejack.ps1 with -InteractiveSudo to prompt for your sudo password via ssh -t." -ForegroundColor Gray
+                throw "Sudo privilege escalation error on ${VM2_IP}: password required but -InteractiveSudo was not specified."
+            } else {
+                Write-Host "`n[!] Notice: Interactive sudo mode active. You may be prompted for your remote sudo password on $VM2_IP." -ForegroundColor Yellow
+            }
+        }
+
         $VM2_Local = Join-Path $KitDir "vm2"
         Send-RemotePackage -IP $VM2_IP -LocalSourceDir $VM2_Local -RemoteTargetDir $VM2_Staging
 
         $VM2_Cmd = "chmod +x '$VM2_Staging/vm2/install.sh' && bash '$VM2_Staging/vm2/install.sh'"
-        Invoke-RemoteCommand -IP $VM2_IP -Command $VM2_Cmd -Description "Executing VM2 Installer"
+        Invoke-RemoteCommand -IP $VM2_IP -Command $VM2_Cmd -Description "Executing VM2 Installer" -Interactive:$InteractiveSudo
 
         # Clean staging directory owned by this deployment attempt
         Remove-RemoteStaging -IP $VM2_IP -RemoteStagingDir $VM2_Staging
@@ -261,11 +313,26 @@ try {
         Write-Host " PHASE 2: DEPLOYING VM1 (WORKLOAD CLIENT & ATTACKS)" -ForegroundColor Cyan
         Write-Host "============================================================" -ForegroundColor Cyan
 
+        # Validate privilege escalation requirement before initiating transfer
+        $vm1SudoOk = Test-RemoteSudo -IP $VM1_IP
+        if (-not $vm1SudoOk) {
+            if (-not $InteractiveSudo) {
+                Write-Host "`n[-] PREFLIGHT PRIVILEGE ERROR: Remote user '$SSHUser' on $VM1_IP requires interactive password authentication for sudo." -ForegroundColor Red
+                Write-Host "    Deployment requires elevated privileges. Either:" -ForegroundColor Yellow
+                Write-Host "    1. Configure passwordless sudo on ${VM1_IP}:" -ForegroundColor Gray
+                Write-Host "       echo '$SSHUser ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/99-pipejack" -ForegroundColor Gray
+                Write-Host "    2. Run setup-pipejack.ps1 with -InteractiveSudo to prompt for your sudo password via ssh -t." -ForegroundColor Gray
+                throw "Sudo privilege escalation error on ${VM1_IP}: password required but -InteractiveSudo was not specified."
+            } else {
+                Write-Host "`n[!] Notice: Interactive sudo mode active. You may be prompted for your remote sudo password on $VM1_IP." -ForegroundColor Yellow
+            }
+        }
+
         $VM1_Local = Join-Path $KitDir "vm1"
         Send-RemotePackage -IP $VM1_IP -LocalSourceDir $VM1_Local -RemoteTargetDir $VM1_Staging
 
         $VM1_Cmd = "chmod +x '$VM1_Staging/vm1/install.sh' && bash '$VM1_Staging/vm1/install.sh' --ci-endpoint 'http://${VM2_IP}:8888/upload'"
-        Invoke-RemoteCommand -IP $VM1_IP -Command $VM1_Cmd -Description "Executing VM1 Installer"
+        Invoke-RemoteCommand -IP $VM1_IP -Command $VM1_Cmd -Description "Executing VM1 Installer" -Interactive:$InteractiveSudo
 
         # Clean staging directory owned by this deployment attempt
         Remove-RemoteStaging -IP $VM1_IP -RemoteStagingDir $VM1_Staging

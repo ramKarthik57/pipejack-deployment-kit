@@ -164,18 +164,27 @@ echo "[+] Step 3: Deploying Workloads, Attacks, Fixtures, and Scripts to $TARGET
 mkdir -p "$TARGET_DIR"
 
 # Applications
+mkdir -p "$TARGET_DIR/applications"
 for app in banking-api calculator-api nodejs-app python-app; do
     if [ -d "$SCRIPT_DIR/applications/$app" ]; then
-        echo "  Deploying applications/$app -> $TARGET_DIR/$app..."
-        mkdir -p "$TARGET_DIR/$app"
-        cp -r "$SCRIPT_DIR/applications/$app/"* "$TARGET_DIR/$app/"
+        echo "  Deploying applications/$app -> $TARGET_DIR/applications/$app and $TARGET_DIR/$app..."
+        mkdir -p "$TARGET_DIR/applications/$app"
+        cp -r "$SCRIPT_DIR/applications/$app/"* "$TARGET_DIR/applications/$app/"
+        if [ ! -e "$TARGET_DIR/$app" ]; then
+            ln -s "$TARGET_DIR/applications/$app" "$TARGET_DIR/$app"
+        fi
     fi
 done
 
 # Legacy compatibility symlink for spring-calc -> calculator-api
-if [ ! -e "$TARGET_DIR/spring-calc" ] && [ -d "$TARGET_DIR/calculator-api" ]; then
-    ln -s "$TARGET_DIR/calculator-api" "$TARGET_DIR/spring-calc"
-    echo "  Created legacy compatibility symlink: $TARGET_DIR/spring-calc -> calculator-api"
+if [ ! -e "$TARGET_DIR/spring-calc" ]; then
+    if [ -d "$TARGET_DIR/applications/calculator-api" ]; then
+        ln -s "$TARGET_DIR/applications/calculator-api" "$TARGET_DIR/spring-calc"
+        echo "  Created legacy compatibility symlink: $TARGET_DIR/spring-calc -> applications/calculator-api"
+    elif [ -d "$TARGET_DIR/calculator-api" ]; then
+        ln -s "$TARGET_DIR/calculator-api" "$TARGET_DIR/spring-calc"
+        echo "  Created legacy compatibility symlink: $TARGET_DIR/spring-calc -> calculator-api"
+    fi
 fi
 
 # Attacks
@@ -186,25 +195,33 @@ if [ -d "$SCRIPT_DIR/attacks" ]; then
 fi
 
 # Security Fixtures
+mkdir -p "$TARGET_DIR/security-fixtures"
 for fix in evil-pkg nodejs-malicious python-malicious vuln-app; do
     if [ -d "$SCRIPT_DIR/security-fixtures/$fix" ]; then
-        echo "  Deploying security-fixtures/$fix -> $TARGET_DIR/$fix (and $TARGET_DIR/security-fixtures/$fix)..."
-        mkdir -p "$TARGET_DIR/$fix"
-        cp -r "$SCRIPT_DIR/security-fixtures/$fix/"* "$TARGET_DIR/$fix/"
+        echo "  Deploying security-fixtures/$fix -> $TARGET_DIR/security-fixtures/$fix and $TARGET_DIR/$fix..."
         mkdir -p "$TARGET_DIR/security-fixtures/$fix"
         cp -r "$SCRIPT_DIR/security-fixtures/$fix/"* "$TARGET_DIR/security-fixtures/$fix/"
+        if [ ! -e "$TARGET_DIR/$fix" ]; then
+            ln -s "$TARGET_DIR/security-fixtures/$fix" "$TARGET_DIR/$fix"
+        fi
     fi
 done
 
-# Upload Utility
+# Scripts (deployed to both $TARGET_DIR/scripts and $TARGET_DIR/ for workflow convenience)
+mkdir -p "$TARGET_DIR/scripts"
 if [ -f "$SCRIPT_DIR/scripts/pipejack-upload.sh" ]; then
-    echo "  Deploying pipejack-upload.sh -> $TARGET_DIR/pipejack-upload.sh..."
+    echo "  Deploying pipejack-upload.sh -> $TARGET_DIR/pipejack-upload.sh and $TARGET_DIR/scripts/..."
+    cp "$SCRIPT_DIR/scripts/pipejack-upload.sh" "$TARGET_DIR/scripts/pipejack-upload.sh"
+    chmod +x "$TARGET_DIR/scripts/pipejack-upload.sh"
     cp "$SCRIPT_DIR/scripts/pipejack-upload.sh" "$TARGET_DIR/pipejack-upload.sh"
     chmod +x "$TARGET_DIR/pipejack-upload.sh"
 fi
 
 # Tarball Generator
 if [ -f "$SCRIPT_DIR/scripts/build-all-tarballs.sh" ]; then
+    echo "  Deploying build-all-tarballs.sh -> $TARGET_DIR/build-all-tarballs.sh and $TARGET_DIR/scripts/..."
+    cp "$SCRIPT_DIR/scripts/build-all-tarballs.sh" "$TARGET_DIR/scripts/build-all-tarballs.sh"
+    chmod +x "$TARGET_DIR/scripts/build-all-tarballs.sh"
     cp "$SCRIPT_DIR/scripts/build-all-tarballs.sh" "$TARGET_DIR/build-all-tarballs.sh"
     chmod +x "$TARGET_DIR/build-all-tarballs.sh"
 fi

@@ -58,8 +58,10 @@ If using a specific private key:
 - `-SSHUser`: Username on VMs (default: `ubuntu`)
 - `-SSHKey`: Optional path to private SSH key
 - `-DryRun`: Executes in safe, non-modifying preview mode. Performs read-only preflight connectivity checks, does not transfer files, does not create or delete remote directories, does not execute installation scripts, and does not alter running services. Prints a full execution plan of what live deployment would execute.
+- `-InteractiveSudo`: Allocates an interactive pseudo-terminal (`ssh -t`) during remote installation to prompt for your sudo password if passwordless sudo is not configured on the target Ubuntu nodes. If passwordless sudo is not active and `-InteractiveSudo` is omitted, the script fails fast with clear guidance.
 - `-SkipVM1`: Skip VM1 client deployment
 - `-SkipVM2`: Skip VM2 server deployment
+- `-SkipPreflight`: Skip preflight connectivity checks
 - `-Force`: Bypasses the interactive confirmation prompt
 
 ---

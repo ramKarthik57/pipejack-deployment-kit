@@ -22,7 +22,7 @@ This guide provides step-by-step instructions for provisioning two clean Ubuntu 
 
 ### Toolchain Prerequisites:
 - **VM2 (Go 1.23+ Required):** Compiling `pipejack-ci` requires Go 1.23 or newer. The reference environment was validated with **Go 1.25.0**. If missing or outdated, `vm2/install.sh` automatically downloads and configures official Go 1.25.0.
-- **VM1 (Archive Generation Tools):** VM1 is provisioned as a lightweight client (Docker, Java, and Maven are deliberately omitted from the default install). However, if you plan to regenerate all 15 workload and attack tarballs from scratch using `build-all-tarballs.sh`, the machine running the script requires `default-jdk` (Java 17+), `maven`, and `npm`. Pre-built or basic tarballs do not require these tools.
+- **VM1 (Archive Generation Tools):** VM1 is provisioned as a lightweight client (Docker, Java, and Maven are deliberately omitted from the VM1 install). Generating all 15 workload and attack tarballs using `build-all-tarballs.sh` requires only standard archiving tools (`tar`, `gzip`) and `npm` (for the `evil-pkg` fixture). Build compilation (Java, Maven, Node, Python) occurs exclusively on VM2 inside isolated CI build containers.
 
 ---
 

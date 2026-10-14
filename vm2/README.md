@@ -88,10 +88,14 @@ Expected output:
   [OK] Docker Registry is HEALTHY (Docker Distribution API v2 operational)
 ```
 
-### Accessing the Web Console
-Open a browser from your host machine (must have network route to VM2):
-```
-http://192.168.88.133:8090
-```
+### Demo Console Access Control & Security Hardening
+The Demo Console web application (`vm2/demo/demo-console/server.py`) includes interactive terminal sessions over WebSocket endpoints (`/ws/terminal/vm1` and `/ws/terminal/vm2`). To safeguard against unauthorized command execution in shared or bridge network configurations, the following controls are enforced:
 
-> **Security Note:** The Demo Console provides interactive terminals and should only be bound to trusted private networks (e.g., host-only or NAT VMware adapters).
+- **Client IP Subnet Restriction:** Inbound terminal WebSocket requests are restricted by default to loopback and private lab subnets: `127.0.0.0/8`, `192.168.88.0/24`, `192.168.152.0/24`, and `::1/128`. Any connection attempt from an unauthorized client IP is rejected with `HTTP 403 Forbidden`.
+- **WebSocket Origin Validation:** All WebSocket upgrade requests validate the `Origin` header against the expected host header and permitted lab subnets to prevent Cross-Site WebSocket Hijacking (CSWSH) from malicious third-party websites.
+- **Configurable Environment Variables:**
+  - `PIPEJACK_ALLOWED_NETWORKS`: Comma-separated list of allowed CIDRs/IPs (default: `127.0.0.0/8,192.168.88.0/24,192.168.152.0/24,::1/128`), or `*` to disable restriction.
+  - `PIPEJACK_CONSOLE_HOST`: Network interface to bind (default: `0.0.0.0`). Set to `127.0.0.1` for loopback-only access.
+  - `PIPEJACK_CONSOLE_PORT`: HTTP listening port (default: `8090`).
+  These variables are configured in `/etc/systemd/system/pipejack-demo-console.service`.
+- **Access Check Diagnostic Endpoint:** Query `http://<VM2_IP>:8090/api/terminal/access-check` to view your client IP, current network policy, and authorization status.

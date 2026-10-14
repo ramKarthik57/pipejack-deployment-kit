@@ -4,6 +4,8 @@ SRC="$(dirname "$(realpath "$0")")"
 if [ -z "$BANKING" ]; then
     if [ -d "$SRC/../../applications/banking-api" ]; then
         BANKING="$(realpath "$SRC/../../applications/banking-api")"
+    elif [ -d "$SRC/../../banking-api" ]; then
+        BANKING="$(realpath "$SRC/../../banking-api")"
     else
         BANKING=~/banking-api
     fi

@@ -72,7 +72,7 @@ Based on live benchmark measurements:
 
 > [!NOTE]
 > - **Go Toolchain:** Compiling the custom CI orchestrator (`pipejack-ci`) requires Go 1.23+. The reference machine runs **Go 1.25.0** (`go version go1.25.0 linux/amd64`). `vm2/install.sh` automatically fetches and installs Go 1.25.0 if Go is missing or < 1.23.
-> - **Archive Generation:** While VM1 is provisioned as a lightweight client (Docker/Java/Maven are omitted from the default install), generating all 15 workload and attack tarballs from scratch using `build-all-tarballs.sh` requires `default-jdk` (Java 17+), `maven`, and `npm` on the machine executing the builder.
+> - **Archive Generation:** VM1 is provisioned as a lightweight developer client (Docker, Java, and Maven are deliberately omitted from VM1). Generating all 15 workload and attack tarballs using `build-all-tarballs.sh` performs clean directory packaging via `tar` and `npm pack` (requiring only standard archive utilities and `npm` for the `evil-pkg` security fixture). Workload compilation and testing occurs strictly on VM2 inside isolated Docker build containers.
 > - **Verification Status:** Components have been audited and verified on the reference lab nodes. End-to-end automated installation has not yet been executed on clean virtual machines from bare ISOs. See [`docs/FRESH_INSTALL.md`](docs/FRESH_INSTALL.md) for the fresh installation guide and acceptance checklist.
 
 ---
@@ -285,6 +285,9 @@ The kit includes automated self-test scripts in `tests/`:
 
 # 3. Run Integration Smoke Tests (Go tests, vet, and live upload pipeline)
 ./tests/smoke-test.sh
+
+# 4. Run Fresh-Install Blocker Regression Tests (Contract layout, PS5.1 AST, ACLs)
+./tests/test-fresh-install-blockers.sh
 ```
 
 ---

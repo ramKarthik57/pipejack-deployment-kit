@@ -304,10 +304,22 @@ if [ -d "$SCRIPT_DIR/demo/demo-console" ]; then
 fi
 
 # Ensure prepare-demo.sh is executable and execute it to generate artifacts
+DEMO_PREP_WARNING=0
 if [ -f "$CONSOLE_DIR/prepare-demo.sh" ]; then
     chmod +x "$CONSOLE_DIR/prepare-demo.sh"
     echo "  Generating demo scenario artifacts..."
-    (cd "$CONSOLE_DIR" && ./prepare-demo.sh >/dev/null 2>&1 || true)
+    DEMO_LOG=$(mktemp)
+    if (cd "$CONSOLE_DIR" && ./prepare-demo.sh > "$DEMO_LOG" 2>&1); then
+        echo "  [OK] Demo scenario artifacts generated successfully."
+        rm -f "$DEMO_LOG"
+    else
+        echo "  [WARNING] [PARTIAL SUCCESS] Demo scenario artifact generation failed." >&2
+        echo "  prepare-demo.sh output:" >&2
+        sed 's/^/       | /' "$DEMO_LOG" >&2
+        rm -f "$DEMO_LOG"
+        echo "  Continuing core installation (demo scenarios are optional for core CI daemon)." >&2
+        DEMO_PREP_WARNING=1
+    fi
 fi
 
 # --- 7. Systemd Service Deployment & Activation ---
@@ -369,7 +381,15 @@ fi
 
 echo
 echo "============================================================"
-echo " PIPEJACK VM2 INSTALLATION COMPLETE"
+if [ "$DEMO_PREP_WARNING" -ne 0 ]; then
+    echo " [PARTIAL SUCCESS] PIPEJACK VM2 INSTALLATION COMPLETE WITH WARNINGS"
+    echo "============================================================"
+    echo " Core services are fully active, but demo scenario artifacts"
+    echo " failed to generate. Regenerate them at any time with:"
+    echo "   cd $CONSOLE_DIR && ./prepare-demo.sh"
+else
+    echo " PIPEJACK VM2 INSTALLATION COMPLETE"
+fi
 echo "============================================================"
 echo " Lead Orchestrator Node Ready:"
 echo "   CI Upload Endpoint:  http://192.168.88.133:${CI_PORT}/upload"
