@@ -52,6 +52,7 @@ REQUIRED_FILES=(
     "vm2/demo/demo-console/server.py"
     "vm2/demo/demo-console/prepare-demo.sh"
     "vm2/scripts/health-check.sh"
+    "vm2/scripts/demo-status-helper.sh"
     "windows/setup-pipejack.ps1"
     "windows/preflight.ps1"
     "windows/verify-pipejack.ps1"
@@ -63,6 +64,7 @@ REQUIRED_FILES=(
     "tests/validate-layout.sh"
     "tests/validate-installers.sh"
     "tests/smoke-test.sh"
+    "tests/test-fresh-install-blockers.sh"
     "docs/ARCHITECTURE.md"
     "docs/FRESH_INSTALL.md"
     "docs/NETWORKING.md"
@@ -96,10 +98,12 @@ EXEC_SCRIPTS=(
     "vm2/install.sh"
     "vm2/scripts/health-check.sh"
     "vm2/scripts/deploy-ci.sh"
+    "vm2/scripts/demo-status-helper.sh"
     "vm2/demo/demo-console/prepare-demo.sh"
     "tests/validate-layout.sh"
     "tests/validate-installers.sh"
     "tests/smoke-test.sh"
+    "tests/test-fresh-install-blockers.sh"
 )
 
 EXEC_FAILURES=0

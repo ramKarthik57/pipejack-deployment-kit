@@ -4,7 +4,9 @@ This guide provides step-by-step instructions for provisioning two clean Ubuntu 
 
 > [!IMPORTANT]
 > **Verification Status & Acceptance Testing:**
-> The deployment scripts, unit test suites, health probes, cryptographic attestation modules, and upload utilities in this kit have been audited and verified against the active reference virtual machines. However, end-to-end automated installation has **not yet been executed on completely fresh, clean virtual machines**. 
+> The deployment scripts, unit test suites, health probes, cryptographic attestation modules, and upload utilities in this kit have been audited and verified against the active reference virtual machines.
+> - **Clean Two-VM Deployment:** **PENDING** — End-to-end automated installation has not yet been executed on completely fresh, clean virtual machines (preserved existing reference VMs to avoid destruction).
+> - **PowerShell Compatibility:** Automation scripts have been statically verified for 100% Windows PowerShell 5.1 AST syntax compatibility (0 errors, 0 ternary operators, 0 pipeline chain operators). Runtime execution under native Windows PowerShell 5.1 (`powershell.exe`) remains **PENDING** verification on a Microsoft Windows host (Linux validation performed via `pwsh 7.4.6`).
 > Follow the exact step-by-step procedure below to deploy onto clean Ubuntu 24.04/22.04 VMs, and validate full system operation using the 10-point Acceptance Checklist at the end of this document.
 
 ---

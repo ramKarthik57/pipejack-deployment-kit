@@ -8,9 +8,9 @@ This directory contains PowerShell orchestration scripts for deploying, verifyin
 
 1. **Operating System:** Windows 10 (Build 1809+) or Windows 11 (for Windows PowerShell 5.1 runtime).
 2. **PowerShell Engine:**
-   - **Windows PowerShell 5.1 (Built-in baseline):** All automation scripts are verified 100% compliant with PS 5.1 syntax via AST inspection (0 syntax errors, 0 ternary operators, 0 pipeline chain operators `&&`/`||`).
-   - **PowerShell 7+ (`pwsh`):** Fully supported on both Windows and Linux/macOS. Cross-platform behavior and mock SSH escalation are verified using `pwsh` in the automated test suite.
-   - *Note on Engine Execution:* Genuine execution of the Windows PowerShell 5.1 engine (`powershell.exe`) requires a Windows operating system; Linux-based testing utilizes AST parsing and modern PowerShell (`pwsh`).
+   - **Windows PowerShell 5.1 (Built-in baseline):** All automation scripts are verified 100% compliant with PS 5.1 syntax via static AST inspection (0 syntax errors, 0 ternary operators, 0 pipeline chain operators `&&`/`||`). Native runtime execution on the Windows PowerShell 5.1 engine (`powershell.exe`) remains **PENDING** verification on a Microsoft Windows host machine.
+   - **PowerShell 7+ (`pwsh` on Linux/macOS/Windows):** Fully supported. Discrete argument preservation with spaces and mock SSH/SCP escalation behaviors are validated using `pwsh 7.4.6` in the automated test suite on Linux.
+   - *Engine Boundary Notice:* PowerShell 7 (`pwsh`) runtime verification on Linux is strictly distinct from native Windows PowerShell 5.1 (`powershell.exe`) execution. While static AST checks prove full syntax compatibility, runtime engine execution requires a Windows host.
 3. **Paths with Spaces:** All scripts support kit roots and SSH key paths containing spaces (e.g. `C:\My Projects\PipeJack Kit\` and `C:\Keys\id ed25519`) using discrete argument arrays for `ssh` and `scp`.
 4. **OpenSSH Client:**
    - Verify by running `ssh.exe -V` in PowerShell.

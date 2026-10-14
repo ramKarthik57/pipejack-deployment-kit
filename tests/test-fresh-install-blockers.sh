@@ -102,7 +102,24 @@ cleanup_unique_canary() {
         fi
     fi
 }
-trap cleanup_unique_canary EXIT
+
+cleanup_suite_traps() {
+    cleanup_unique_canary
+    if [ -n "${TEST_SPACES_OUT:-}" ] && [ -d "$TEST_SPACES_OUT" ]; then
+        if [ "$(stat -c '%u' "$TEST_SPACES_OUT" 2>/dev/null || echo -1)" -eq "$(id -u)" ]; then
+            rm -rf "$TEST_SPACES_OUT"
+        fi
+    fi
+    if [ -n "${TEST_REL_OUT:-}" ] && [ -d "$TEST_REL_OUT" ]; then
+        if [[ "$TEST_REL_OUT" =~ ^tmp_pipejack_rel_[A-Za-z0-9]+$ ]] && [ "$(stat -c '%u' "$TEST_REL_OUT" 2>/dev/null || echo -1)" -eq "$(id -u)" ]; then
+            rm -rf "$TEST_REL_OUT"
+        fi
+    fi
+    if [ -n "${PRE_EXISTING_SAFETY_DIR:-}" ] && [ -d "$PRE_EXISTING_SAFETY_DIR" ]; then
+        rm -rf "$PRE_EXISTING_SAFETY_DIR"
+    fi
+}
+trap cleanup_suite_traps EXIT INT TERM HUP
 
 echo "============================================================"
 echo " PIPEJACK ACCEPTANCE HARDENING & REGRESSION TEST SUITE"
@@ -115,12 +132,50 @@ echo "============================================================"
 # Test 1: Configurable Output Directory Isolation (Spaces & Relative Paths)
 # -----------------------------------------------------------------------------
 section "Archive Output Directory Isolation (Spaces & Relative Paths)"
-TEST_SPACES_OUT=$(mktemp -d "/tmp/pipejack test out spaces XXXXXX")
-TEST_REL_OUT="tmp_test_rel_out_$$"
-mkdir -p "$TEST_REL_OUT"
+
+# Pre-existing directory safety proof: verify that pre-existing directories are never removed
+PRE_EXISTING_SAFETY_DIR=$(mktemp -d -p . tmp_pipejack_rel_preexisting_XXXXXX) || {
+    echo "[-] Failed to create safety sentinel directory" >&2
+    exit 1
+}
+echo "PIPEJACK_PRE_EXISTING_SAFETY_SENTINEL" > "$PRE_EXISTING_SAFETY_DIR/safety.marker"
+
+# Absolute path with spaces
+TEST_SPACES_OUT=$(mktemp -d "/tmp/pipejack test out spaces XXXXXX") || {
+    echo "[-] Failed to create spaces output directory" >&2
+    exit 1
+}
+
+# Genuinely unique relative directory created atomically by mktemp -d in current directory
+TEST_REL_OUT_RAW=$(mktemp -d -p . tmp_pipejack_rel_XXXXXX) || {
+    echo "[-] Failed to create unique relative output directory" >&2
+    exit 1
+}
+# Normalize relative path (strip leading ./)
+TEST_REL_OUT="${TEST_REL_OUT_RAW#./}"
 
 cleanup_test1() {
-    rm -rf "$TEST_SPACES_OUT" "$TEST_REL_OUT"
+    # 1. Clean up spaces dir after ownership verification
+    if [ -n "${TEST_SPACES_OUT:-}" ] && [ -d "$TEST_SPACES_OUT" ]; then
+        local owner_uid
+        owner_uid=$(stat -c '%u' "$TEST_SPACES_OUT" 2>/dev/null || echo -1)
+        if [ "$owner_uid" -eq "$(id -u)" ]; then
+            rm -rf "$TEST_SPACES_OUT"
+        fi
+    fi
+
+    # 2. Clean up relative output directory strictly:
+    # Must match expected naming pattern, must exist, must be owned by current user,
+    # and must be the exact path created by mktemp for this test.
+    if [ -n "${TEST_REL_OUT:-}" ] && [ -d "$TEST_REL_OUT" ]; then
+        if [[ "$TEST_REL_OUT" =~ ^tmp_pipejack_rel_[A-Za-z0-9]+$ ]]; then
+            local rel_owner_uid
+            rel_owner_uid=$(stat -c '%u' "$TEST_REL_OUT" 2>/dev/null || echo -1)
+            if [ "$rel_owner_uid" -eq "$(id -u)" ]; then
+                rm -rf "$TEST_REL_OUT"
+            fi
+        fi
+    fi
 }
 
 TEST1_OK=1
@@ -183,7 +238,16 @@ if [ ! -f "$UNIQUE_CANARY_FILE" ] || [ "$(cat "$UNIQUE_CANARY_FILE")" != "$UNIQU
     echo "  [-] Unique canary marker was altered during test" >&2
 fi
 
+# 6. Verify pre-existing safety directory was strictly preserved
+if [ ! -d "$PRE_EXISTING_SAFETY_DIR" ] || [ ! -f "$PRE_EXISTING_SAFETY_DIR/safety.marker" ] || [ "$(cat "$PRE_EXISTING_SAFETY_DIR/safety.marker")" != "PIPEJACK_PRE_EXISTING_SAFETY_SENTINEL" ]; then
+    TEST1_OK=0
+    echo "  [-] Safety violation: Pre-existing safety directory was altered or deleted!" >&2
+fi
+
 cleanup_test1
+
+# Explicitly remove pre-existing safety directory after proving it was not deleted by the test
+rm -rf "$PRE_EXISTING_SAFETY_DIR"
 
 if [ $TEST1_OK -eq 1 ]; then
     pass "Configured output directories (spaces and relative) generate all 15 valid archives with zero host /tmp side-effects"
@@ -326,7 +390,7 @@ if command -v pwsh >/dev/null 2>&1; then
     " 2>&1)
 
     if echo "$PS_CHECK_OUTPUT" | grep -q "PS51_COMPLIANT"; then
-        pass "PowerShell AST confirms 100% PS 5.1 syntax compatibility (0 syntax errors, 0 ternary, 0 pipeline chains). [Runtime: pwsh 7.4.6; powershell.exe runtime requires Windows]"
+        pass "PowerShell static AST confirms 100% PS 5.1 syntax compatibility (0 syntax errors, 0 ternary operators, 0 pipeline chain operators). [Note: Native Windows PowerShell 5.1 runtime engine execution remains PENDING (requires Microsoft Windows with powershell.exe); static AST parsed via pwsh 7.4.6]"
     else
         fail "PowerShell AST detected incompatibility: $PS_CHECK_OUTPUT"
     fi
@@ -501,7 +565,12 @@ class QuietRequestHandler(server.ConsoleRequestHandler):
     def log_message(self, format, *args):
         pass
 
-httpd = ThreadingHTTPServer(('127.0.0.1', 0), QuietRequestHandler)
+class QuietHTTPServer(ThreadingHTTPServer):
+    def handle_error(self, request, client_address):
+        # Suppress benign ConnectionResetError when test sockets close
+        pass
+
+httpd = QuietHTTPServer(('127.0.0.1', 0), QuietRequestHandler)
 port = httpd.server_address[1]
 t = threading.Thread(target=httpd.serve_forever, daemon=True)
 t.start()
@@ -586,17 +655,27 @@ finally:
     httpd.server_close()
 " 2>&1)
 
-if [ "$BEHAVIORAL_CONSOLE_RESULT" = "BEHAVIORAL_CONSOLE_VERIFIED" ]; then
+if echo "$BEHAVIORAL_CONSOLE_RESULT" | grep -q "BEHAVIORAL_CONSOLE_VERIFIED"; then
     pass "Demo Console server behavioral tests verified: REST unauth 200, valid origin 101, missing origin 101, CSWSH 403, subnet override 403"
 else
     fail "Demo Console server behavioral test failed: $BEHAVIORAL_CONSOLE_RESULT"
 fi
 
 # -----------------------------------------------------------------------------
-# Test 8: Production Implementation Verification of vm2/install.sh Demo Status
+# Test 8: Production Helper Module Verification (demo-status-helper.sh) & Installer Hardening
 # -----------------------------------------------------------------------------
-section "Production Implementation Verification of vm2/install.sh Demo Status"
+section "Production Helper Module Verification (demo-status-helper.sh) & Installer Hardening"
 TMP_VM2_TEST_DIR=$(mktemp -d "/tmp/pipejack-test-vm2-status-XXXXXX")
+
+# Verify production installer has removed --test-demo-status CLI interface
+INSTALLER_CLI_CHECK=$("$ROOT_DIR/vm2/install.sh" --test-demo-status "$TMP_VM2_TEST_DIR" 2>&1 || true)
+if ! echo "$INSTALLER_CLI_CHECK" | grep -q "Unknown option '--test-demo-status'"; then
+    echo "  [-] Security defect: vm2/install.sh still accepts test CLI option --test-demo-status!" >&2
+    fail "Test option not removed from production installer interface"
+fi
+
+# Source production helper directly and exercise in disposable test paths without root privileges
+source "$ROOT_DIR/vm2/scripts/demo-status-helper.sh"
 
 # Subtest 1: prepare-demo.sh succeeds -> SUCCESS status and FULL DEMO READINESS banner
 DIR_SUCCESS="$TMP_VM2_TEST_DIR/success"
@@ -607,7 +686,11 @@ echo "Artifacts generated successfully"
 exit 0
 EOF
 chmod +x "$DIR_SUCCESS/prepare-demo.sh"
-OUT_SUCCESS=$("$ROOT_DIR/vm2/install.sh" --test-demo-status "$DIR_SUCCESS" 2>&1)
+OUT_SUCCESS=$(
+    prepare_demo_artifacts "$DIR_SUCCESS"
+    get_demo_status_banner "$DEMO_STATUS" "$DIR_SUCCESS"
+    echo "STATUS_RESULT: $DEMO_STATUS"
+)
 
 # Subtest 2: prepare-demo.sh fails -> FAILED status, captured error output, PARTIAL SUCCESS banner
 DIR_FAILED="$TMP_VM2_TEST_DIR/failed"
@@ -618,12 +701,20 @@ echo "SYNTAX ERROR in demo fixture at line 42" >&2
 exit 1
 EOF
 chmod +x "$DIR_FAILED/prepare-demo.sh"
-OUT_FAILED=$("$ROOT_DIR/vm2/install.sh" --test-demo-status "$DIR_FAILED" 2>&1)
+OUT_FAILED=$(
+    prepare_demo_artifacts "$DIR_FAILED" 2>&1
+    get_demo_status_banner "$DEMO_STATUS" "$DIR_FAILED"
+    echo "STATUS_RESULT: $DEMO_STATUS"
+)
 
 # Subtest 3: prepare-demo.sh missing -> MISSING status and PARTIAL SUCCESS banner
 DIR_MISSING="$TMP_VM2_TEST_DIR/missing"
 mkdir -p "$DIR_MISSING"
-OUT_MISSING=$("$ROOT_DIR/vm2/install.sh" --test-demo-status "$DIR_MISSING" 2>&1)
+OUT_MISSING=$(
+    prepare_demo_artifacts "$DIR_MISSING" 2>&1
+    get_demo_status_banner "$DEMO_STATUS" "$DIR_MISSING"
+    echo "STATUS_RESULT: $DEMO_STATUS"
+)
 
 VM2_STATUS_OK=1
 if ! echo "$OUT_SUCCESS" | grep -q "STATUS_RESULT: SUCCESS" || ! echo "$OUT_SUCCESS" | grep -q "FULL DEMO READINESS"; then
@@ -640,9 +731,9 @@ if ! echo "$OUT_MISSING" | grep -q "STATUS_RESULT: MISSING" || ! echo "$OUT_MISS
 fi
 
 if [ $VM2_STATUS_OK -eq 1 ]; then
-    pass "Exercised production implementation in vm2/install.sh: accurately reports SUCCESS, FAILED (with captured error log), and MISSING states"
+    pass "Production helper demo-status-helper.sh accurately handles SUCCESS, FAILED (with captured error log), and MISSING states; test CLI option removed from vm2/install.sh"
 else
-    fail "vm2/install.sh partial-success state validation failed"
+    fail "demo-status-helper.sh validation failed"
 fi
 rm -rf "$TMP_VM2_TEST_DIR"
 

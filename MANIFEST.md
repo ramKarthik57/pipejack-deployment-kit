@@ -8,7 +8,7 @@
 | :--- | :--- | :--- | :--- | :--- |
 | `.gitignore` | 757 | `0644` | Root / Shared | `7c8c191c3cc0c56e2e71c24546f9596a86a3ed490bf1ccd4582bcc364d0762fd` |
 | `LICENSE` | 2569 | `0644` | Root / Shared | `5f742747cd1c7a00348c5d6535f157c2bf793ee19ba06d7e248e4f62f906f178` |
-| `README.md` | 17847 | `0664` | Root / Shared | `9dd143d2a5e6d5c953744939e67be30fddb1ebc7757e5bd66ff1d6eeb89494c2` |
+| `README.md` | 17920 | `0664` | Root / Shared | `081978b19361e07ac2d3ff084a20b675fcc478ed97147926480b43090d481dc3` |
 | `SECURITY.md` | 4673 | `0664` | Root / Shared | `709ef0b82f16e193da94e16a8f2386bd8ba12bcb016f24b6b77ea09b0ccd6229` |
 | `SOURCE_MAPPING.md` | 11484 | `0644` | Root / Shared | `3e705627633a9fc5da981fa6651aabe7b104f85c8754fd0197d429b213941b68` |
 | `UPSTREAM_BASELINE.md` | 4503 | `0644` | Root / Shared | `99ab541a9232f65d4553c294f30e26db3fba64c8487ab65aa9ab2cfa1c993add` |
@@ -16,7 +16,7 @@
 | `config/README.md` | 397 | `0644` | Configuration | `7aeaa7628a5f68655fb0790ea0dca33068e15b743939ed9b0ba62b91e90192ff` |
 | `config/defaults.env.example` | 996 | `0644` | Configuration | `31f762a7116dae8358be800d23edbb207881c8586ac044359b0ccab6d1ff9d18` |
 | `docs/ARCHITECTURE.md` | 8608 | `0664` | Documentation | `680db0700e1290f3af5653db22a7a8fdee5eaf8026f1c644f116581d41468a22` |
-| `docs/FRESH_INSTALL.md` | 6850 | `0664` | Documentation | `40af9d33b0d7298e672eba581707283ba90f6bfe6b25c33436fe9b27137f7690` |
+| `docs/FRESH_INSTALL.md` | 7323 | `0664` | Documentation | `033edc8f26475f492404022d708cf3a72af5523f1a051acdd878cac4ee94d858` |
 | `docs/NETWORKING.md` | 4086 | `0644` | Documentation | `5e98f0649ad9755b754fc503ae251bf2a5d99d9febe1e9fa09f580c373491e24` |
 | `docs/RECOVERY.md` | 3140 | `0644` | Documentation | `fc4aca31bf7b1124afb8d0482fc4006cc372093bada9d9a3baf735a421ca2246` |
 | `docs/TROUBLESHOOTING.md` | 3978 | `0644` | Documentation | `0ffa9826f7aed6563fbe31e13f13f4e46a3485eabaceb10d27a8424b1b5f020e` |
@@ -25,9 +25,9 @@
 | `shared/templates/01-netplan-vm2.yaml.example` | 498 | `0644` | Root / Shared | `1ccffbb5653831239e011077b644e794b8848d6f9571ef9a27fb83f6d2aee43a` |
 | `shared/templates/hosts.example` | 155 | `0644` | Root / Shared | `27baa2f36776d67d9bb6330371f8c5d7b538bfde3aa6c05f74c353436cc34e36` |
 | `tests/smoke-test.sh` | 5757 | `0755` | Testing / CI | `d8ea4cd1d742de739c4aaa0f043e9300f43b52510ce92347d94953fae1dac4e5` |
-| `tests/test-fresh-install-blockers.sh` | 31601 | `0775` | Testing / CI | `6709e89d50e414a099cd190515cd66886a08d1e7a9cc18c4a039f23a8b88dc1e` |
+| `tests/test-fresh-install-blockers.sh` | 35571 | `0775` | Testing / CI | `0ff0112550c35b0b5593056257233adbe813b7c07e03d4f44565528a7e46e667` |
 | `tests/validate-installers.sh` | 6182 | `0775` | Testing / CI | `804aad743bd20f21b65fe44a13d3015909934ad81a8c5056b1d45a9cf56ae504` |
-| `tests/validate-layout.sh` | 6147 | `0755` | Testing / CI | `1a921ba2dd074680fc6158b0028f5245846b3c86e39e880c547231999636e2c6` |
+| `tests/validate-layout.sh` | 6313 | `0755` | Testing / CI | `13f7ca85f117fee8ce619f8ce0515f699b29c709fc8e2f4f09d4b0683de6af47` |
 | `vm1/README.md` | 4720 | `0664` | VM1 (Client) | `fdbb1d628cfdc29c042046084649fcb9b293f9504955c630938ade53ff495d78` |
 | `vm1/applications/banking-api/build-tarballs.sh` | 726 | `0775` | VM1 (Client) | `edaec304abf0eafc8cc77a5305e929574868fb5b9cb7e5210e36a689204521f4` |
 | `vm1/applications/banking-api/malicious.sh` | 163 | `0755` | VM1 (Client) | `e2c4af5a3b8b4fdede87515f34311c3f2a72178b89f55d6b37666f6560c6aba1` |
@@ -1344,7 +1344,8 @@
 | `vm2/deployment/policies/policy-spring.yaml` | 250 | `0644` | VM2 (Server) | `759a7082f5fbb5ac0e57fd515740c1618264564eacb95ba525c5d3edd62556fe` |
 | `vm2/deployment/systemd/pipejack-ci.service` | 562 | `0644` | VM2 (Server) | `1b34236eb86c3425b8a056aff442d4cf32a6acd35242057288f14426184e32fb` |
 | `vm2/deployment/systemd/pipejack-demo-console.service` | 824 | `0664` | VM2 (Server) | `cd99218c656f38d702e845996073296e051d8a50539df72346e4fc3fc8dff436` |
-| `vm2/install.sh` | 15518 | `0775` | VM2 (Server) | `070ca397e599e687f04d86c1783fc28f188a5cd57e26c847c2f7ecbe8ea00e1d` |
+| `vm2/install.sh` | 13162 | `0775` | VM2 (Server) | `3e1548fdfaa048825515b44e9549af4726da3c6d53942e46c0dd2e90ee3bc7e9` |
+| `vm2/scripts/demo-status-helper.sh` | 2625 | `0755` | VM2 (Server) | `49b825ac9142f37f6212e1a5729e42e1201dc168fcfe0c705d9759b97e3528e8` |
 | `vm2/scripts/deploy-ci.sh` | 1909 | `0755` | VM2 (Server) | `53da40c54ea6cbaa8c0f4c3e978504fdfc2ffe89d0cb1f834a089bd17c86bd4a` |
 | `vm2/scripts/health-check.sh` | 4045 | `0755` | VM2 (Server) | `393004bd638ae1e9c87090ebd65b1fe1e3f0948af22024a68ea4b28b3536f67d` |
 | `vm2/scripts/prepare-demo.sh` | 7458 | `0755` | VM2 (Server) | `0868ecc3a9073f7bf4c1a38ac9acd5794cf09e44cd5571c9e7f1d4bc1794f84c` |
@@ -1356,7 +1357,7 @@
 | `vm2/services/custom-ci/main.go` | 29176 | `0644` | VM2 (Server) | `dd7cd2fb61a45dde0081341a513ad18be179e2c592e50ad5b5a5fc54aa7067af` |
 | `vm2/services/custom-ci/quarantine_test.go` | 7601 | `0644` | VM2 (Server) | `5f2c60ab758f893c7886188a9c7128b64399b97c0e906ffd44650758176681d6` |
 | `vm2/services/custom-ci/verify-attest.go` | 3023 | `0644` | VM2 (Server) | `72be4d7b9852946a3cefbc859d0da170a9705e6d7899e7e8ef1139e9f656cde6` |
-| `windows/README.md` | 4278 | `0664` | Windows Host | `1ed5e6f124e03bc4eaa4fb723f76aaaae128cec671bf0f42d541abc354a1d0da` |
+| `windows/README.md` | 4535 | `0664` | Windows Host | `00af7f86f81d406fbb14951fce43e7ee5821f8c5a56e329eb1efddb1ccece270` |
 | `windows/preflight.ps1` | 6069 | `0664` | Windows Host | `312c2325eeeb56ac227dc0d09f4535ca90c3b5c408f5685b576fac2c3653378d` |
 | `windows/setup-pipejack.ps1` | 16570 | `0664` | Windows Host | `bf37c05251348e70a9539712f7c6890921ecbc5d9a5d3cffec9a3144921ff6cc` |
 | `windows/verify-pipejack.ps1` | 7682 | `0664` | Windows Host | `3af601417c806bc24313e0f6ecd64633b730dfeed2af9dd416a7384b7f7c684c` |
