@@ -1698,7 +1698,26 @@ ExecStart=/bin/true
 EOF
         chmod 0644 "$TMP_SYSTEMD_FIXTURE/units/docker.service"
 
-        # Dependency fixture 2: mock pipejack-ci executable for ExecStart=/usr/local/bin/pipejack-ci
+        # Dependency fixture 2: mock target fixtures for unit references and systemd default dependencies
+        cat << 'EOF' > "$TMP_SYSTEMD_FIXTURE/units/network.target"
+[Unit]
+Description=Network
+EOF
+        chmod 0644 "$TMP_SYSTEMD_FIXTURE/units/network.target"
+
+        cat << 'EOF' > "$TMP_SYSTEMD_FIXTURE/units/multi-user.target"
+[Unit]
+Description=Multi-User System
+EOF
+        chmod 0644 "$TMP_SYSTEMD_FIXTURE/units/multi-user.target"
+
+        cat << 'EOF' > "$TMP_SYSTEMD_FIXTURE/units/sysinit.target"
+[Unit]
+Description=System Initialization
+EOF
+        chmod 0644 "$TMP_SYSTEMD_FIXTURE/units/sysinit.target"
+
+        # Dependency fixture 3: mock pipejack-ci executable for ExecStart=/usr/local/bin/pipejack-ci
         cat << 'EOF' > "$TMP_SYSTEMD_FIXTURE/bin/pipejack-ci"
 #!/bin/sh
 exit 0
@@ -1706,11 +1725,12 @@ EOF
         chmod 0755 "$TMP_SYSTEMD_FIXTURE/bin/pipejack-ci"
 
         # Run systemd-analyze verify inside unshare user/mount namespace with mock /usr/local/bin
+        # SYSTEMD_UNIT_PATH is strictly restricted to disposable test directories without host unit paths
         verify_ec=0
         SYSTEMD_VERIFY_OUT=$(unshare -rm bash -c "
             set -euo pipefail
             mount --bind '$TMP_SYSTEMD_FIXTURE/bin' /usr/local/bin
-            export SYSTEMD_UNIT_PATH='$TMP_SYSTEMD_FIXTURE/units:/lib/systemd/system:/usr/lib/systemd/system:/etc/systemd/system'
+            export SYSTEMD_UNIT_PATH='$TMP_SYSTEMD_FIXTURE/units:$TMP_SYSTEMD_FIXTURE/staged'
             systemd-analyze verify '$TMP_SYSTEMD_FIXTURE/staged/pipejack-ci.service' '$TMP_SYSTEMD_FIXTURE/staged/pipejack-demo-console.service' 2>&1
             umount /usr/local/bin
         " 2>&1) || verify_ec=$?
