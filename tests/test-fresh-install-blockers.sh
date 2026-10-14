@@ -94,7 +94,7 @@ unset UNIQUE_CANARY_FILE
 unset TEST_SPACES_OUT TEST_REL_OUT_RAW TEST_REL_OUT PRE_EXISTING_SAFETY_DIR
 unset VM1_TARGET_DIR VM1_OUT_DIR VM1_BASHRC VM1_LOG
 unset MOCK_SPACES_DIR DIR_SPACES MOCK_SSH_DIR TMP_VM2_TEST_DIR TMP_TEST_KEY_DIR
-unset HOSTILE_SENTINEL_DIR
+unset HOSTILE_SENTINEL_DIR OUTSIDE_TEST_FIXTURE
 
 # Registry of temporary paths created exclusively by THIS test execution process
 declare -A CREATED_TEST_PATHS=()
@@ -124,6 +124,58 @@ is_within_boundary() {
     [ -n "$target" ] && [ -n "$boundary" ] || return 1
     boundary="${boundary%/}"
     [ "$target" != "$boundary" ] && [ "${target#$boundary/}" != "$target" ]
+}
+
+# Out-of-boundary test fixture tracking (cleaned only for exact verified fixture)
+OUTSIDE_TEST_FIXTURE=""
+
+cleanup_outside_fixture() {
+    local d="$OUTSIDE_TEST_FIXTURE"
+    if [ -n "$d" ] && [ -e "$d" ]; then
+        local owner_uid
+        owner_uid=$(stat -c '%u' "$d" 2>/dev/null || echo -1)
+        if [ "$owner_uid" -eq "$(id -u)" ]; then
+            local canon_d canon_var_tmp
+            canon_d="$(realpath -q "$d" 2>/dev/null || echo "")"
+            canon_var_tmp="$(realpath -q "/var/tmp" 2>/dev/null || echo "/var/tmp")"
+            if [ -n "$canon_d" ] && [ "$canon_d" != "$canon_var_tmp" ] && [[ "$canon_d" == "$canon_var_tmp"/pipejack-boundary-test-* ]]; then
+                rm -rf "$d"
+            fi
+        fi
+        OUTSIDE_TEST_FIXTURE=""
+    fi
+}
+
+# Recovery helper for orphaned test-owned directories (validates before safe deletion)
+recover_and_clean_test_dir() {
+    local target="$1"
+    local pattern="$2"
+    if [ -z "$target" ] || [ ! -e "$target" ]; then
+        return 0
+    fi
+    local owner_uid
+    owner_uid=$(stat -c '%u' "$target" 2>/dev/null || echo -1)
+    if [ "$owner_uid" -ne "$(id -u)" ]; then
+        echo "  [-] Recovery refused: target $target not owned by current user" >&2
+        return 1
+    fi
+    local canon_target
+    canon_target="$(realpath -q "$target" 2>/dev/null || echo "")"
+    if [ -z "$canon_target" ]; then
+        return 1
+    fi
+    if ! is_within_boundary "$canon_target" "$CANONICAL_TMP" && ! is_within_boundary "$canon_target" "$CANONICAL_ROOT"; then
+        echo "  [-] Recovery refused: target $target outside permitted boundaries" >&2
+        return 1
+    fi
+    local base_name
+    base_name="$(basename "$canon_target")"
+    if [[ "$base_name" != $pattern ]]; then
+        echo "  [-] Recovery refused: target basename $base_name does not match expected pattern $pattern" >&2
+        return 1
+    fi
+    register_test_path "$target"
+    safe_delete_path "$target"
 }
 
 safe_delete_path() {
@@ -183,6 +235,8 @@ cleanup_suite_traps() {
     for p in "${!CREATED_TEST_PATHS[@]}"; do
         safe_delete_path "$p"
     done
+    # Safely clean out-of-boundary test fixture if active during interrupt or exit
+    cleanup_outside_fixture
 }
 
 handle_signal() {
@@ -215,6 +269,13 @@ if [ "${1:-}" = "--internal-test-cleanup-signal" ]; then
     SIG_TMP=$(mktemp -d "/tmp/pipejack-sig-cleanup-XXXXXX") || exit 1
     register_test_path "$SIG_TMP"
     echo "SIG_TMP:$SIG_TMP"
+    if [ -d "/var/tmp" ] && [ -w "/var/tmp" ]; then
+        SIG_OUTSIDE=$(mktemp -d -p /var/tmp pipejack-boundary-test-XXXXXX 2>/dev/null || echo "")
+        if [ -n "$SIG_OUTSIDE" ]; then
+            OUTSIDE_TEST_FIXTURE="$SIG_OUTSIDE"
+            echo "SIG_OUTSIDE:$SIG_OUTSIDE"
+        fi
+    fi
     kill -INT $$
     echo "SHOULD_NOT_REACH_HERE"
     exit 0
@@ -981,17 +1042,33 @@ if [ ! -f "$HOSTILE_SENTINEL_DIR/sentinel.data" ]; then
 fi
 register_test_path "$HOSTILE_SENTINEL_DIR"
 
-# 1b: Out-of-bounds path must NOT be deleted (even if registered)
-OUTSIDE_TMP_DIR=$(mktemp -d -p /var/tmp pipejack-boundary-test-XXXXXX 2>/dev/null || echo "")
-if [ -n "$OUTSIDE_TMP_DIR" ]; then
+# 1b: Out-of-bounds path must NOT be deleted by safe_delete_path (even if registered)
+OUTSIDE_TMP_DIR=""
+if [ -d "/var/tmp" ] && [ -w "/var/tmp" ]; then
+    OUTSIDE_TMP_DIR=$(mktemp -d -p /var/tmp pipejack-boundary-test-XXXXXX 2>/dev/null || echo "")
+fi
+
+if [ -z "$OUTSIDE_TMP_DIR" ] || [ ! -d "$OUTSIDE_TMP_DIR" ]; then
+    TRAP_SAFETY_OK=0
+    echo "  [-] Test defect: Failed to create out-of-boundary test fixture in /var/tmp" >&2
+else
+    # Register in OUTSIDE_TEST_FIXTURE so interruption traps guarantee cleanup
+    OUTSIDE_TEST_FIXTURE="$OUTSIDE_TMP_DIR"
     register_test_path "$OUTSIDE_TMP_DIR"
     safe_delete_path "$OUTSIDE_TMP_DIR"
     if [ ! -d "$OUTSIDE_TMP_DIR" ]; then
         TRAP_SAFETY_OK=0
         echo "  [-] Security defect: safe_delete_path deleted a path outside permitted boundaries (/tmp, repo root)!" >&2
+    else
+        # safe_delete_path correctly refused deletion!
+        unregister_test_path "$OUTSIDE_TMP_DIR"
     fi
-    rm -rf "$OUTSIDE_TMP_DIR"
-    unregister_test_path "$OUTSIDE_TMP_DIR"
+    # Clean up the validated test fixture via verified cleanup function
+    cleanup_outside_fixture
+    if [ -d "$OUTSIDE_TMP_DIR" ]; then
+        TRAP_SAFETY_OK=0
+        echo "  [-] Failed to clean out-of-boundary test fixture after test" >&2
+    fi
 fi
 
 # 1c: Critical system root and repo root protection
@@ -1040,25 +1117,51 @@ if [ -z "$LEGIT_PATH" ]; then
 elif [ -d "$LEGIT_PATH" ]; then
     TRAP_SAFETY_OK=0
     echo "  [-] Legitimate test temporary directory was not cleaned up by script EXIT trap: $LEGIT_PATH" >&2
-    safe_delete_path "$LEGIT_PATH" 2>/dev/null || rm -rf "$LEGIT_PATH"
+    # Recovery: validate path identity, ownership, and boundary before safe registration and deletion (no rm -rf fallback)
+    if ! recover_and_clean_test_dir "$LEGIT_PATH" "pipejack-legit-cleanup-*"; then
+        echo "  [-] Recovery failed for orphaned test directory: $LEGIT_PATH" >&2
+    fi
 fi
 
-# 3. Subtest B: Signal termination (SIGINT) invokes actual script trap, terminates immediately, and cleans registered paths
+# 2b. Test recovery helper behavior directly on simulated uncleaned test directory
+SAMPLE_ORPHAN_DIR=$(mktemp -d "/tmp/pipejack-legit-cleanup-sample-XXXXXX") || { echo "[-] Failed to create sample orphan dir" >&2; exit 1; }
+if ! recover_and_clean_test_dir "$SAMPLE_ORPHAN_DIR" "pipejack-legit-cleanup-*"; then
+    TRAP_SAFETY_OK=0
+    echo "  [-] recover_and_clean_test_dir failed on valid test-owned directory" >&2
+elif [ -e "$SAMPLE_ORPHAN_DIR" ]; then
+    TRAP_SAFETY_OK=0
+    echo "  [-] Sample orphan directory was not cleaned by recover_and_clean_test_dir" >&2
+fi
+
+# Verify recovery rejects paths with non-matching patterns or hostile paths
+if recover_and_clean_test_dir "$HOSTILE_SENTINEL_DIR" "pipejack-legit-cleanup-*" 2>/dev/null; then
+    :
+fi
+if [ ! -f "$HOSTILE_SENTINEL_DIR/sentinel.data" ]; then
+    TRAP_SAFETY_OK=0
+    echo "  [-] Critical defect: recover_and_clean_test_dir deleted hostile sentinel!" >&2
+fi
+
+# 3. Subtest B: Signal termination (SIGINT) invokes actual script trap, terminates immediately, and cleans registered paths and fixtures
 SIG_OUTPUT=$(python3 -c "
 import subprocess, os
 
 res = subprocess.run(['bash', '$SCRIPT_FILE', '--internal-test-cleanup-signal'], capture_output=True, text=True)
 sig_tmp = None
+sig_outside = None
 for line in res.stdout.splitlines():
     if line.startswith('SIG_TMP:'):
         sig_tmp = line.split(':', 1)[1]
+    elif line.startswith('SIG_OUTSIDE:'):
+        sig_outside = line.split(':', 1)[1]
 
-cleaned = 'YES' if (sig_tmp and not os.path.exists(sig_tmp)) else 'NO'
+cleaned_tmp = 'YES' if (sig_tmp and not os.path.exists(sig_tmp)) else 'NO'
+cleaned_outside = 'YES' if (not sig_outside or not os.path.exists(sig_outside)) else 'NO'
 unreached = 'YES' if 'SHOULD_NOT_REACH_HERE' not in res.stdout else 'NO'
-print(f'RC:{res.returncode}|CLEANED:{cleaned}|UNREACHED:{unreached}|PATH:{sig_tmp}')
+print(f'RC:{res.returncode}|CLEANED_TMP:{cleaned_tmp}|CLEANED_OUTSIDE:{cleaned_outside}|UNREACHED:{unreached}|TMP:{sig_tmp}|OUTSIDE:{sig_outside}')
 " 2>&1)
 
-if ! echo "$SIG_OUTPUT" | grep -q "RC:130" || ! echo "$SIG_OUTPUT" | grep -q "CLEANED:YES" || ! echo "$SIG_OUTPUT" | grep -q "UNREACHED:YES"; then
+if ! echo "$SIG_OUTPUT" | grep -q "RC:130" || ! echo "$SIG_OUTPUT" | grep -q "CLEANED_TMP:YES" || ! echo "$SIG_OUTPUT" | grep -q "CLEANED_OUTSIDE:YES" || ! echo "$SIG_OUTPUT" | grep -q "UNREACHED:YES"; then
     TRAP_SAFETY_OK=0
     echo "  [-] Signal termination safety test failed: $SIG_OUTPUT" >&2
 fi
