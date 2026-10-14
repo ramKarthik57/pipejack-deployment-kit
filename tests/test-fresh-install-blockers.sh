@@ -131,51 +131,154 @@ OUTSIDE_TEST_FIXTURE=""
 
 cleanup_outside_fixture() {
     local d="$OUTSIDE_TEST_FIXTURE"
-    if [ -n "$d" ] && [ -e "$d" ]; then
-        local owner_uid
-        owner_uid=$(stat -c '%u' "$d" 2>/dev/null || echo -1)
-        if [ "$owner_uid" -eq "$(id -u)" ]; then
-            local canon_d canon_var_tmp
-            canon_d="$(realpath -q "$d" 2>/dev/null || echo "")"
-            canon_var_tmp="$(realpath -q "/var/tmp" 2>/dev/null || echo "/var/tmp")"
-            if [ -n "$canon_d" ] && [ "$canon_d" != "$canon_var_tmp" ] && [[ "$canon_d" == "$canon_var_tmp"/pipejack-boundary-test-* ]]; then
-                rm -rf "$d"
-            fi
-        fi
-        OUTSIDE_TEST_FIXTURE=""
-    fi
-}
+    # Idempotent reset so trap/handler cannot re-trigger on the same reference
+    OUTSIDE_TEST_FIXTURE=""
 
-# Recovery helper for orphaned test-owned directories (validates before safe deletion)
-recover_and_clean_test_dir() {
-    local target="$1"
-    local pattern="$2"
-    if [ -z "$target" ] || [ ! -e "$target" ]; then
+    if [ -z "$d" ]; then
         return 0
     fi
+
+    # 1. Target must actually exist on filesystem
+    if [ ! -e "$d" ]; then
+        return 0
+    fi
+
+    # 2. Must be a real directory, NOT a symlink
+    if [ ! -d "$d" ] || [ -L "$d" ]; then
+        echo "  [-] cleanup_outside_fixture refused: target is not a real directory or is a symlink: $d" >&2
+        return 1
+    fi
+
+    # 3. Ownership check: must be owned by current user UID
+    local owner_uid
+    owner_uid=$(stat -c '%u' "$d" 2>/dev/null || echo -1)
+    if [ "$owner_uid" -ne "$(id -u)" ]; then
+        echo "  [-] cleanup_outside_fixture refused: target not owned by UID $(id -u): $d" >&2
+        return 1
+    fi
+
+    # 4. Canonicalize target path and canonicalize /var/tmp
+    local canon_d canon_var_tmp
+    canon_d="$(realpath -q "$d" 2>/dev/null || echo "")"
+    canon_var_tmp="$(realpath -q "/var/tmp" 2>/dev/null || echo "/var/tmp")"
+
+    if [ -z "$canon_d" ] || [ -z "$canon_var_tmp" ]; then
+        echo "  [-] cleanup_outside_fixture refused: failed to resolve canonical paths for $d" >&2
+        return 1
+    fi
+
+    # Canonical path itself must be a directory and not a symlink component
+    if [ ! -d "$canon_d" ] || [ -L "$canon_d" ]; then
+        echo "  [-] cleanup_outside_fixture refused: canonical target is not a real directory: $canon_d" >&2
+        return 1
+    fi
+
+    # 5. Canonical fixture path's parent must be EXACTLY the canonical /var/tmp directory
+    local parent_dir
+    parent_dir="$(dirname "$canon_d")"
+    if [ "$parent_dir" != "$canon_var_tmp" ]; then
+        echo "  [-] cleanup_outside_fixture refused: canonical parent $parent_dir != $canon_var_tmp" >&2
+        return 1
+    fi
+
+    # 6. Basename must match pipejack-boundary-test-* without allowing wildcard to span directory separators
+    local base_name
+    base_name="$(basename "$canon_d")"
+    if [[ "$base_name" != pipejack-boundary-test-* ]] || [[ "$base_name" == *"/"* ]] || [ "$base_name" = "pipejack-boundary-test-" ]; then
+        echo "  [-] cleanup_outside_fixture refused: invalid basename pattern: $base_name" >&2
+        return 1
+    fi
+
+    # 7. Original recorded path and canonical target must refer to the exact same fixture
+    local orig_canon
+    orig_canon="$(realpath -q "$d" 2>/dev/null || echo "")"
+    if [ "$orig_canon" != "$canon_d" ] || [ "$(basename "$d")" != "$base_name" ]; then
+        echo "  [-] cleanup_outside_fixture refused: original path $d does not match canonical fixture $canon_d" >&2
+        return 1
+    fi
+
+    # All validations passed: safe to delete
+    rm -rf "$canon_d"
+    return 0
+}
+
+# Recovery helper for orphaned test-owned directories (strictly validates direct child of /tmp)
+recover_and_clean_test_dir() {
+    local target="$1"
+    local expected_pattern="${2:-pipejack-legit-cleanup-*}"
+
+    if [ -z "$target" ]; then
+        return 1
+    fi
+
+    # 1. Target must actually exist on filesystem
+    if [ ! -e "$target" ]; then
+        return 0
+    fi
+
+    # 2. Must be a real directory, NOT a symlink
+    if [ ! -d "$target" ] || [ -L "$target" ]; then
+        echo "  [-] recover_and_clean_test_dir refused: target is not a real directory or is a symlink: $target" >&2
+        return 1
+    fi
+
+    # 3. Ownership check: must be owned by current user UID
     local owner_uid
     owner_uid=$(stat -c '%u' "$target" 2>/dev/null || echo -1)
     if [ "$owner_uid" -ne "$(id -u)" ]; then
-        echo "  [-] Recovery refused: target $target not owned by current user" >&2
+        echo "  [-] recover_and_clean_test_dir refused: target not owned by UID $(id -u): $target" >&2
         return 1
     fi
-    local canon_target
+
+    # 4. Canonicalize target and canonicalize /tmp
+    local canon_target canon_tmp
     canon_target="$(realpath -q "$target" 2>/dev/null || echo "")"
-    if [ -z "$canon_target" ]; then
+    canon_tmp="$(realpath -q "/tmp" 2>/dev/null || echo "/tmp")"
+
+    if [ -z "$canon_target" ] || [ -z "$canon_tmp" ]; then
+        echo "  [-] recover_and_clean_test_dir refused: failed to resolve canonical paths for $target" >&2
         return 1
     fi
-    if ! is_within_boundary "$canon_target" "$CANONICAL_TMP" && ! is_within_boundary "$canon_target" "$CANONICAL_ROOT"; then
-        echo "  [-] Recovery refused: target $target outside permitted boundaries" >&2
+
+    # Canonical path itself must be a directory and not a symlink
+    if [ ! -d "$canon_target" ] || [ -L "$canon_target" ]; then
+        echo "  [-] recover_and_clean_test_dir refused: canonical target is not a real directory: $canon_target" >&2
         return 1
     fi
+
+    # 5. Strict direct child check: canonical target's parent must be EXACTLY canonical /tmp
+    local parent_dir
+    parent_dir="$(dirname "$canon_target")"
+    if [ "$parent_dir" != "$canon_tmp" ]; then
+        echo "  [-] recover_and_clean_test_dir refused: target $target is not a direct child of $canon_tmp (parent: $parent_dir)" >&2
+        return 1
+    fi
+
+    # 6. Strict basename check: must match expected pattern without directory separators or traversal
     local base_name
     base_name="$(basename "$canon_target")"
-    if [[ "$base_name" != $pattern ]]; then
-        echo "  [-] Recovery refused: target basename $base_name does not match expected pattern $pattern" >&2
+    if [[ "$base_name" != $expected_pattern ]] || [[ "$base_name" == *"/"* ]] || [ "$base_name" = "." ] || [ "$base_name" = ".." ] || [ "$base_name" = "$expected_pattern" ]; then
+        echo "  [-] recover_and_clean_test_dir refused: basename $base_name does not match pattern $expected_pattern" >&2
         return 1
     fi
+
+    # 7. Original target basename must match canonical basename
+    local orig_base
+    orig_base="$(basename "$target")"
+    if [ "$orig_base" != "$base_name" ]; then
+        echo "  [-] recover_and_clean_test_dir refused: original basename $orig_base mismatch with canonical $base_name" >&2
+        return 1
+    fi
+
+    # All checks passed: register in CREATED_TEST_PATHS and clean via safe_delete_path
     register_test_path "$target"
     safe_delete_path "$target"
+
+    if [ ! -e "$target" ]; then
+        return 0
+    else
+        return 1
+    fi
 }
 
 safe_delete_path() {
@@ -266,6 +369,7 @@ if [ "${1:-}" = "--internal-test-cleanup-env" ]; then
 fi
 
 if [ "${1:-}" = "--internal-test-cleanup-signal" ]; then
+    SIG_NAME="${2:-INT}"
     SIG_TMP=$(mktemp -d "/tmp/pipejack-sig-cleanup-XXXXXX") || exit 1
     register_test_path "$SIG_TMP"
     echo "SIG_TMP:$SIG_TMP"
@@ -276,7 +380,11 @@ if [ "${1:-}" = "--internal-test-cleanup-signal" ]; then
             echo "SIG_OUTSIDE:$SIG_OUTSIDE"
         fi
     fi
-    kill -INT $$
+    case "$SIG_NAME" in
+        TERM) kill -TERM $$ ;;
+        HUP)  kill -HUP $$ ;;
+        *)    kill -INT $$ ;;
+    esac
     echo "SHOULD_NOT_REACH_HERE"
     exit 0
 fi
@@ -1071,7 +1179,52 @@ else
     fi
 fi
 
-# 1c: Critical system root and repo root protection
+# 1c: Negative assertion checks on cleanup_outside_fixture
+# 1c-1: Symlinked path must be rejected by cleanup_outside_fixture
+TEST_SYMLINK_TARGET=$(mktemp -d -p /var/tmp pipejack-sym-target-XXXXXX)
+TEST_SYMLINK="/var/tmp/pipejack-boundary-test-symlink-$$"
+ln -s "$TEST_SYMLINK_TARGET" "$TEST_SYMLINK"
+OUTSIDE_TEST_FIXTURE="$TEST_SYMLINK"
+if cleanup_outside_fixture 2>/dev/null; then
+    TRAP_SAFETY_OK=0
+    echo "  [-] Security defect: cleanup_outside_fixture accepted a symlink!" >&2
+fi
+if [ ! -L "$TEST_SYMLINK" ]; then
+    TRAP_SAFETY_OK=0
+    echo "  [-] Security defect: cleanup_outside_fixture deleted a symlink!" >&2
+fi
+rm -f "$TEST_SYMLINK"
+rm -rf "$TEST_SYMLINK_TARGET"
+
+# 1c-2: Nested path in /var/tmp must be rejected by cleanup_outside_fixture
+TEST_NESTED_PARENT=$(mktemp -d -p /var/tmp pipejack-nested-parent-XXXXXX)
+TEST_NESTED_CHILD="$TEST_NESTED_PARENT/pipejack-boundary-test-child-$$"
+mkdir -p "$TEST_NESTED_CHILD"
+OUTSIDE_TEST_FIXTURE="$TEST_NESTED_CHILD"
+if cleanup_outside_fixture 2>/dev/null; then
+    TRAP_SAFETY_OK=0
+    echo "  [-] Security defect: cleanup_outside_fixture accepted a nested path!" >&2
+fi
+if [ ! -d "$TEST_NESTED_CHILD" ]; then
+    TRAP_SAFETY_OK=0
+    echo "  [-] Security defect: cleanup_outside_fixture deleted a nested path!" >&2
+fi
+rm -rf "$TEST_NESTED_PARENT"
+
+# 1c-3: Mismatched basename pattern must be rejected by cleanup_outside_fixture
+TEST_MISMATCH_DIR=$(mktemp -d -p /var/tmp pipejack-mismatch-fixture-XXXXXX)
+OUTSIDE_TEST_FIXTURE="$TEST_MISMATCH_DIR"
+if cleanup_outside_fixture 2>/dev/null; then
+    TRAP_SAFETY_OK=0
+    echo "  [-] Security defect: cleanup_outside_fixture accepted mismatched pattern!" >&2
+fi
+if [ ! -d "$TEST_MISMATCH_DIR" ]; then
+    TRAP_SAFETY_OK=0
+    echo "  [-] Security defect: cleanup_outside_fixture deleted mismatched directory!" >&2
+fi
+rm -rf "$TEST_MISMATCH_DIR"
+
+# 1d: Critical system root and repo root protection
 register_test_path "$ROOT_DIR"
 safe_delete_path "$ROOT_DIR"
 if [ ! -d "$ROOT_DIR" ]; then
@@ -1123,47 +1276,92 @@ elif [ -d "$LEGIT_PATH" ]; then
     fi
 fi
 
-# 2b. Test recovery helper behavior directly on simulated uncleaned test directory
-SAMPLE_ORPHAN_DIR=$(mktemp -d "/tmp/pipejack-legit-cleanup-sample-XXXXXX") || { echo "[-] Failed to create sample orphan dir" >&2; exit 1; }
-if ! recover_and_clean_test_dir "$SAMPLE_ORPHAN_DIR" "pipejack-legit-cleanup-*"; then
-    TRAP_SAFETY_OK=0
-    echo "  [-] recover_and_clean_test_dir failed on valid test-owned directory" >&2
-elif [ -e "$SAMPLE_ORPHAN_DIR" ]; then
-    TRAP_SAFETY_OK=0
-    echo "  [-] Sample orphan directory was not cleaned by recover_and_clean_test_dir" >&2
-fi
-
-# Verify recovery rejects paths with non-matching patterns or hostile paths
+# 2b. Comprehensive negative and positive assertions on recover_and_clean_test_dir
+# 2b-1: Unmatching hostile sentinel must be refused by recover_and_clean_test_dir
 if recover_and_clean_test_dir "$HOSTILE_SENTINEL_DIR" "pipejack-legit-cleanup-*" 2>/dev/null; then
-    :
+    TRAP_SAFETY_OK=0
+    echo "  [-] Security defect: recover_and_clean_test_dir returned success for hostile sentinel!" >&2
 fi
 if [ ! -f "$HOSTILE_SENTINEL_DIR/sentinel.data" ]; then
     TRAP_SAFETY_OK=0
     echo "  [-] Critical defect: recover_and_clean_test_dir deleted hostile sentinel!" >&2
 fi
 
-# 3. Subtest B: Signal termination (SIGINT) invokes actual script trap, terminates immediately, and cleans registered paths and fixtures
+# 2b-2: Nested matching-name directory must be refused (must be direct child of /tmp)
+NESTED_TMP_PARENT=$(mktemp -d "/tmp/pipejack-nested-parent-XXXXXX")
+NESTED_TMP_CHILD="$NESTED_TMP_PARENT/pipejack-legit-cleanup-child-$$"
+mkdir -p "$NESTED_TMP_CHILD"
+if recover_and_clean_test_dir "$NESTED_TMP_CHILD" "pipejack-legit-cleanup-*" 2>/dev/null; then
+    TRAP_SAFETY_OK=0
+    echo "  [-] Security defect: recover_and_clean_test_dir accepted nested directory!" >&2
+fi
+if [ ! -d "$NESTED_TMP_CHILD" ]; then
+    TRAP_SAFETY_OK=0
+    echo "  [-] Security defect: recover_and_clean_test_dir deleted nested directory!" >&2
+fi
+rm -rf "$NESTED_TMP_PARENT"
+
+# 2b-3: Symlinked directory matching pattern must be refused
+TARGET_FOR_LINK=$(mktemp -d "/tmp/pipejack-target-XXXXXX")
+SYMLINK_LEGIT="/tmp/pipejack-legit-cleanup-symlink-$$"
+ln -s "$TARGET_FOR_LINK" "$SYMLINK_LEGIT"
+if recover_and_clean_test_dir "$SYMLINK_LEGIT" "pipejack-legit-cleanup-*" 2>/dev/null; then
+    TRAP_SAFETY_OK=0
+    echo "  [-] Security defect: recover_and_clean_test_dir accepted symlink!" >&2
+fi
+if [ ! -L "$SYMLINK_LEGIT" ]; then
+    TRAP_SAFETY_OK=0
+    echo "  [-] Security defect: recover_and_clean_test_dir deleted symlink!" >&2
+fi
+rm -f "$SYMLINK_LEGIT"
+rm -rf "$TARGET_FOR_LINK"
+
+# 2b-4: Valid direct child of /tmp matching pattern must succeed
+VALID_DIRECT_TMP=$(mktemp -d "/tmp/pipejack-legit-cleanup-valid-XXXXXX")
+if ! recover_and_clean_test_dir "$VALID_DIRECT_TMP" "pipejack-legit-cleanup-*"; then
+    TRAP_SAFETY_OK=0
+    echo "  [-] recover_and_clean_test_dir failed on valid direct child directory" >&2
+elif [ -e "$VALID_DIRECT_TMP" ]; then
+    TRAP_SAFETY_OK=0
+    echo "  [-] Valid direct child was not cleaned by recover_and_clean_test_dir" >&2
+fi
+
+# 3. Subtest B: Multi-signal termination (SIGINT, SIGTERM, SIGHUP) invokes actual traps, terminates immediately, and cleans all fixtures
 SIG_OUTPUT=$(python3 -c "
-import subprocess, os
+import subprocess, os, signal
 
-res = subprocess.run(['bash', '$SCRIPT_FILE', '--internal-test-cleanup-signal'], capture_output=True, text=True)
-sig_tmp = None
-sig_outside = None
-for line in res.stdout.splitlines():
-    if line.startswith('SIG_TMP:'):
-        sig_tmp = line.split(':', 1)[1]
-    elif line.startswith('SIG_OUTSIDE:'):
-        sig_outside = line.split(':', 1)[1]
+SCRIPT_FILE = '$SCRIPT_FILE'
+all_sig_ok = True
+details = []
+for test_sig, expected_rc in [('INT', 130), ('TERM', 143), ('HUP', 129)]:
+    res = subprocess.run(
+        ['bash', SCRIPT_FILE, '--internal-test-cleanup-signal', test_sig],
+        capture_output=True,
+        text=True,
+        preexec_fn=lambda: signal.signal(signal.SIGHUP, signal.SIG_DFL)
+    )
+    sig_tmp = None
+    sig_outside = None
+    for line in res.stdout.splitlines():
+        if line.startswith('SIG_TMP:'):
+            sig_tmp = line.split(':', 1)[1]
+        elif line.startswith('SIG_OUTSIDE:'):
+            sig_outside = line.split(':', 1)[1]
+    cleaned_tmp = (sig_tmp and not os.path.exists(sig_tmp))
+    cleaned_outside = (not sig_outside or not os.path.exists(sig_outside))
+    unreached = ('SHOULD_NOT_REACH_HERE' not in res.stdout)
+    rc_match = (res.returncode == expected_rc)
+    if not (cleaned_tmp and cleaned_outside and unreached and rc_match):
+        all_sig_ok = False
+    details.append(f'{test_sig}:rc={res.returncode}(exp {expected_rc}),tmp={cleaned_tmp},outside={cleaned_outside},unreached={unreached}')
 
-cleaned_tmp = 'YES' if (sig_tmp and not os.path.exists(sig_tmp)) else 'NO'
-cleaned_outside = 'YES' if (not sig_outside or not os.path.exists(sig_outside)) else 'NO'
-unreached = 'YES' if 'SHOULD_NOT_REACH_HERE' not in res.stdout else 'NO'
-print(f'RC:{res.returncode}|CLEANED_TMP:{cleaned_tmp}|CLEANED_OUTSIDE:{cleaned_outside}|UNREACHED:{unreached}|TMP:{sig_tmp}|OUTSIDE:{sig_outside}')
+status = 'PASS' if all_sig_ok else 'FAIL'
+print(f'STATUS:{status}|' + '; '.join(details))
 " 2>&1)
 
-if ! echo "$SIG_OUTPUT" | grep -q "RC:130" || ! echo "$SIG_OUTPUT" | grep -q "CLEANED_TMP:YES" || ! echo "$SIG_OUTPUT" | grep -q "CLEANED_OUTSIDE:YES" || ! echo "$SIG_OUTPUT" | grep -q "UNREACHED:YES"; then
+if ! echo "$SIG_OUTPUT" | grep -q "^STATUS:PASS"; then
     TRAP_SAFETY_OK=0
-    echo "  [-] Signal termination safety test failed: $SIG_OUTPUT" >&2
+    echo "  [-] Multi-signal termination safety test failed: $SIG_OUTPUT" >&2
 fi
 
 # Clean up sentinel directory safely via safe_delete_path
