@@ -87,39 +87,96 @@ for f in "${STANDARD_TMP_ARCHIVES[@]}"; do
     fi
 done
 
-# Create a unique test-owned canary file (using PID and nanosecond timestamp)
-UNIQUE_CANARY_TAG="pipejack_canary_${$}_$(date +%s%N)"
-UNIQUE_CANARY_FILE=$(mktemp "/tmp/${UNIQUE_CANARY_TAG}_XXXXXX.marker")
-echo "$UNIQUE_CANARY_TAG" > "$UNIQUE_CANARY_FILE"
+# -----------------------------------------------------------------------------
+# Explicit Initialization of Temporary Path Variables (Prevent Env Inheritance)
+# -----------------------------------------------------------------------------
+unset UNIQUE_CANARY_FILE
+unset TEST_SPACES_OUT TEST_REL_OUT_RAW TEST_REL_OUT PRE_EXISTING_SAFETY_DIR
+unset VM1_TARGET_DIR VM1_OUT_DIR VM1_BASHRC VM1_LOG
+unset MOCK_SPACES_DIR DIR_SPACES MOCK_SSH_DIR TMP_VM2_TEST_DIR TMP_TEST_KEY_DIR
+unset HOSTILE_SENTINEL_DIR
 
-cleanup_unique_canary() {
-    # Verify file ownership before removing; only clean up our own unique test marker
-    if [ -f "$UNIQUE_CANARY_FILE" ]; then
-        local owner_uid
-        owner_uid=$(stat -c '%u' "$UNIQUE_CANARY_FILE" 2>/dev/null || echo -1)
-        if [ "$owner_uid" -eq "$(id -u)" ]; then
-            rm -f "$UNIQUE_CANARY_FILE"
-        fi
+# Registry of temporary paths created exclusively by THIS test execution process
+declare -A CREATED_TEST_PATHS=()
+
+register_test_path() {
+    local p="$1"
+    if [ -n "$p" ]; then
+        CREATED_TEST_PATHS["$p"]=1
     fi
+}
+
+unregister_test_path() {
+    local p="$1"
+    if [ -n "$p" ]; then
+        unset "CREATED_TEST_PATHS[$p]"
+    fi
+}
+
+safe_delete_path() {
+    local p="$1"
+    if [ -z "$p" ]; then
+        return 0
+    fi
+    # Security Rule 1: Must be explicitly registered as created by this process
+    if [ "${CREATED_TEST_PATHS["$p"]:-0}" -ne 1 ]; then
+        return 0
+    fi
+    # Security Rule 2: Path must actually exist on filesystem
+    if [ ! -e "$p" ]; then
+        unset "CREATED_TEST_PATHS[$p]"
+        return 0
+    fi
+    # Security Rule 3: Must be owned by current user UID
+    local owner_uid
+    owner_uid=$(stat -c '%u' "$p" 2>/dev/null || echo -1)
+    if [ "$owner_uid" -ne "$(id -u)" ]; then
+        return 0
+    fi
+    # Security Rule 4: Must not be a critical system path or repo root
+    local abs_p
+    abs_p="$(readlink -f "$p" 2>/dev/null || echo "")"
+    if [ "$abs_p" = "/" ] || [ "$abs_p" = "/tmp" ] || [ "$abs_p" = "$HOME" ] || [ "$abs_p" = "$ROOT_DIR" ]; then
+        return 0
+    fi
+
+    rm -rf "$p"
+    unset "CREATED_TEST_PATHS[$p]"
 }
 
 cleanup_suite_traps() {
-    cleanup_unique_canary
-    if [ -n "${TEST_SPACES_OUT:-}" ] && [ -d "$TEST_SPACES_OUT" ]; then
-        if [ "$(stat -c '%u' "$TEST_SPACES_OUT" 2>/dev/null || echo -1)" -eq "$(id -u)" ]; then
-            rm -rf "$TEST_SPACES_OUT"
-        fi
-    fi
-    if [ -n "${TEST_REL_OUT:-}" ] && [ -d "$TEST_REL_OUT" ]; then
-        if [[ "$TEST_REL_OUT" =~ ^tmp_pipejack_rel_[A-Za-z0-9]+$ ]] && [ "$(stat -c '%u' "$TEST_REL_OUT" 2>/dev/null || echo -1)" -eq "$(id -u)" ]; then
-            rm -rf "$TEST_REL_OUT"
-        fi
-    fi
-    if [ -n "${PRE_EXISTING_SAFETY_DIR:-}" ] && [ -d "$PRE_EXISTING_SAFETY_DIR" ]; then
-        rm -rf "$PRE_EXISTING_SAFETY_DIR"
-    fi
+    # Delete only paths recorded in CREATED_TEST_PATHS
+    for p in "${!CREATED_TEST_PATHS[@]}"; do
+        safe_delete_path "$p"
+    done
 }
-trap cleanup_suite_traps EXIT INT TERM HUP
+
+handle_signal() {
+    local sig="$1"
+    # Immediately disable traps to prevent recursion and terminate safely
+    trap - EXIT INT TERM HUP
+    cleanup_suite_traps
+    case "$sig" in
+        INT)  exit 130 ;;
+        TERM) exit 143 ;;
+        HUP)  exit 129 ;;
+        *)    exit 1 ;;
+    esac
+}
+
+trap 'handle_signal INT' INT
+trap 'handle_signal TERM' TERM
+trap 'handle_signal HUP' HUP
+trap cleanup_suite_traps EXIT
+
+# Create a unique test-owned canary file (using PID and nanosecond timestamp)
+UNIQUE_CANARY_TAG="pipejack_canary_${$}_$(date +%s%N)"
+UNIQUE_CANARY_FILE=$(mktemp "/tmp/${UNIQUE_CANARY_TAG}_XXXXXX.marker") || {
+    echo "[-] Failed to create unique canary marker" >&2
+    exit 1
+}
+register_test_path "$UNIQUE_CANARY_FILE"
+echo "$UNIQUE_CANARY_TAG" > "$UNIQUE_CANARY_FILE"
 
 echo "============================================================"
 echo " PIPEJACK ACCEPTANCE HARDENING & REGRESSION TEST SUITE"
@@ -128,10 +185,83 @@ echo " Unique Canary:     $(basename "$UNIQUE_CANARY_FILE")"
 echo " Date:              $(date -u '+%Y-%m-%d %H:%M:%SZ')"
 echo "============================================================"
 
+# List of all 15 expected generated archive filenames
+EXPECTED_ARTIFACT_NAMES=(
+    "banking-api-clean.tar.gz"
+    "banking-api-malicious.tar.gz"
+    "calculator-api.tar.gz"
+    "nodejs-app-clean.tar.gz"
+    "python-app-clean.tar.gz"
+    "nodejs-app-malicious.tar.gz"
+    "python-app-malicious.tar.gz"
+    "evil-pkg-1.0.0.tgz"
+    "attack-01-shell-exec.tar.gz"
+    "attack-02-http-exfil.tar.gz"
+    "attack-03-fs-tamper.tar.gz"
+    "attack-04-base64-shell.tar.gz"
+    "attack-05-multi-stage.tar.gz"
+    "attack-06-slow-exfil.tar.gz"
+    "attack-07-anomaly.tar.gz"
+)
+
+# Function: validate_output_archives <target_dir> <description>
+# Asserts each of the 15 expected artifacts exists, is non-empty, and passes tar -tzf.
+# Asserts no expected artifact is missing and no unexpected artifact was substituted.
+validate_output_archives() {
+    local target_dir="$1"
+    local desc="$2"
+    local ok=1
+
+    for name in "${EXPECTED_ARTIFACT_NAMES[@]}"; do
+        local file_path="$target_dir/$name"
+        if [ ! -f "$file_path" ]; then
+            echo "  [-] Missing expected archive in $desc: $name" >&2
+            ok=0
+            continue
+        fi
+        if [ ! -s "$file_path" ]; then
+            echo "  [-] Expected archive is empty (0 bytes) in $desc: $name" >&2
+            ok=0
+            continue
+        fi
+        if ! tar -tzf "$file_path" >/dev/null 2>&1; then
+            echo "  [-] Archive corrupt (tar -tzf validation failed) in $desc: $name" >&2
+            ok=0
+            continue
+        fi
+    done
+
+    local found_count=0
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        found_count=$((found_count + 1))
+        local base
+        base=$(basename "$f")
+        local is_expected=0
+        for exp in "${EXPECTED_ARTIFACT_NAMES[@]}"; do
+            if [ "$base" = "$exp" ]; then
+                is_expected=1
+                break
+            fi
+        done
+        if [ $is_expected -ne 1 ]; then
+            echo "  [-] Unexpected artifact found in $desc: $base" >&2
+            ok=0
+        fi
+    done < <(find "$target_dir" -maxdepth 1 \( -name "*.tar.gz" -o -name "*.tgz" \))
+
+    if [ "$found_count" -ne "${#EXPECTED_ARTIFACT_NAMES[@]}" ]; then
+        echo "  [-] Archive count mismatch in $desc: expected ${#EXPECTED_ARTIFACT_NAMES[@]}, found $found_count" >&2
+        ok=0
+    fi
+
+    [ $ok -eq 1 ]
+}
+
 # -----------------------------------------------------------------------------
-# Test 1: Configurable Output Directory Isolation (Spaces & Relative Paths)
+# Test 1: Configurable Output Directory Isolation & 15-Archive Validation
 # -----------------------------------------------------------------------------
-section "Archive Output Directory Isolation (Spaces & Relative Paths)"
+section "Archive Output Directory Isolation & 15-Archive Validation (Spaces & Relative Paths)"
 
 # Pre-existing directory safety proof: verify that pre-existing directories are never removed
 PRE_EXISTING_SAFETY_DIR=$(mktemp -d -p . tmp_pipejack_rel_preexisting_XXXXXX) || {
@@ -145,59 +275,39 @@ TEST_SPACES_OUT=$(mktemp -d "/tmp/pipejack test out spaces XXXXXX") || {
     echo "[-] Failed to create spaces output directory" >&2
     exit 1
 }
+register_test_path "$TEST_SPACES_OUT"
 
 # Genuinely unique relative directory created atomically by mktemp -d in current directory
 TEST_REL_OUT_RAW=$(mktemp -d -p . tmp_pipejack_rel_XXXXXX) || {
     echo "[-] Failed to create unique relative output directory" >&2
     exit 1
 }
-# Normalize relative path (strip leading ./)
+register_test_path "$TEST_REL_OUT_RAW"
 TEST_REL_OUT="${TEST_REL_OUT_RAW#./}"
+register_test_path "$TEST_REL_OUT"
 
 cleanup_test1() {
-    # 1. Clean up spaces dir after ownership verification
-    if [ -n "${TEST_SPACES_OUT:-}" ] && [ -d "$TEST_SPACES_OUT" ]; then
-        local owner_uid
-        owner_uid=$(stat -c '%u' "$TEST_SPACES_OUT" 2>/dev/null || echo -1)
-        if [ "$owner_uid" -eq "$(id -u)" ]; then
-            rm -rf "$TEST_SPACES_OUT"
-        fi
-    fi
-
-    # 2. Clean up relative output directory strictly:
-    # Must match expected naming pattern, must exist, must be owned by current user,
-    # and must be the exact path created by mktemp for this test.
-    if [ -n "${TEST_REL_OUT:-}" ] && [ -d "$TEST_REL_OUT" ]; then
-        if [[ "$TEST_REL_OUT" =~ ^tmp_pipejack_rel_[A-Za-z0-9]+$ ]]; then
-            local rel_owner_uid
-            rel_owner_uid=$(stat -c '%u' "$TEST_REL_OUT" 2>/dev/null || echo -1)
-            if [ "$rel_owner_uid" -eq "$(id -u)" ]; then
-                rm -rf "$TEST_REL_OUT"
-            fi
-        fi
-    fi
+    safe_delete_path "$TEST_SPACES_OUT"
+    safe_delete_path "$TEST_REL_OUT_RAW"
+    safe_delete_path "$TEST_REL_OUT"
 }
 
 TEST1_OK=1
 
-# 1. Absolute path with spaces
+# 1. Absolute path with spaces (validate all 15 archives individually)
 if "$ROOT_DIR/vm1/scripts/build-all-tarballs.sh" --output-dir "$TEST_SPACES_OUT" >/dev/null 2>&1; then
-    SPACES_COUNT=$(find "$TEST_SPACES_OUT" -maxdepth 1 -name "*.tar.gz" -o -name "*.tgz" | wc -l)
-    if [ "$SPACES_COUNT" -ne 15 ]; then
+    if ! validate_output_archives "$TEST_SPACES_OUT" "spaces output directory"; then
         TEST1_OK=0
-        echo "  [-] Expected 15 archives in spaces output directory, found $SPACES_COUNT" >&2
     fi
 else
     TEST1_OK=0
     echo "  [-] build-all-tarballs.sh failed with spaces output path" >&2
 fi
 
-# 2. Relative path
+# 2. Relative path (validate all 15 archives individually)
 if "$ROOT_DIR/vm1/scripts/build-all-tarballs.sh" --output-dir "$TEST_REL_OUT" >/dev/null 2>&1; then
-    REL_COUNT=$(find "$TEST_REL_OUT" -maxdepth 1 -name "*.tar.gz" -o -name "*.tgz" | wc -l)
-    if [ "$REL_COUNT" -ne 15 ]; then
+    if ! validate_output_archives "$TEST_REL_OUT" "relative output directory"; then
         TEST1_OK=0
-        echo "  [-] Expected 15 archives in relative output directory, found $REL_COUNT" >&2
     fi
 else
     TEST1_OK=0
@@ -208,6 +318,11 @@ fi
 if [ -f "$ROOT_DIR/vm1/security-fixtures/evil-pkg/evil-pkg-1.0.0.tgz" ]; then
     TEST1_OK=0
     echo "  [-] evil-pkg fixture source directory contains generated archive!" >&2
+fi
+STRAY_REPO_ARCHIVES=$(find "$ROOT_DIR/vm1" "$ROOT_DIR/vm2" -name "*.tar.gz" -o -name "*.tgz" 2>/dev/null | wc -l)
+if [ "$STRAY_REPO_ARCHIVES" -ne 0 ]; then
+    TEST1_OK=0
+    echo "  [-] Repository source tree contains $STRAY_REPO_ARCHIVES generated archive(s)!" >&2
 fi
 
 # 4. Verify shared /tmp standard archives were neither created, deleted, nor modified
@@ -247,31 +362,37 @@ fi
 cleanup_test1
 
 # Explicitly remove pre-existing safety directory after proving it was not deleted by the test
-rm -rf "$PRE_EXISTING_SAFETY_DIR"
+if [ -d "$PRE_EXISTING_SAFETY_DIR" ]; then
+    rm -rf "$PRE_EXISTING_SAFETY_DIR"
+fi
 
 if [ $TEST1_OK -eq 1 ]; then
-    pass "Configured output directories (spaces and relative) generate all 15 valid archives with zero host /tmp side-effects"
+    pass "Configured output directories (spaces and relative) generate and validate all 15 individual archives (non-empty, valid tar -tzf, zero substitutions) with zero host /tmp side-effects"
 else
-    fail "Archive output directory isolation failed"
+    fail "Archive output directory isolation and validation failed"
 fi
 
 # -----------------------------------------------------------------------------
 # Test 2: Actual VM1 Installation Contract (install.sh --target-dir --skip-deps)
 # -----------------------------------------------------------------------------
 section "Actual VM1 Installation Contract & Layout Verification"
-VM1_TARGET_DIR=$(mktemp -d "/tmp/pipejack-vm1-target-XXXXXX")
-VM1_OUT_DIR=$(mktemp -d "/tmp/pipejack-vm1-out-XXXXXX")
-VM1_BASHRC=$(mktemp "/tmp/pipejack-vm1-bashrc-XXXXXX")
+VM1_TARGET_DIR=$(mktemp -d "/tmp/pipejack-vm1-target-XXXXXX") || { echo "[-] Failed to create VM1 target dir" >&2; exit 1; }
+register_test_path "$VM1_TARGET_DIR"
+VM1_OUT_DIR=$(mktemp -d "/tmp/pipejack-vm1-out-XXXXXX") || { echo "[-] Failed to create VM1 out dir" >&2; exit 1; }
+register_test_path "$VM1_OUT_DIR"
+VM1_BASHRC=$(mktemp "/tmp/pipejack-vm1-bashrc-XXXXXX") || { echo "[-] Failed to create VM1 bashrc" >&2; exit 1; }
+register_test_path "$VM1_BASHRC"
 
 INSTALL_OK=0
-VM1_LOG=$(mktemp)
+VM1_LOG=$(mktemp) || { echo "[-] Failed to create VM1 log" >&2; exit 1; }
+register_test_path "$VM1_LOG"
 if BASHRC="$VM1_BASHRC" PIPEJACK_OUTPUT_DIR="$VM1_OUT_DIR" PIPEJACK_MIN_DISK_GB=1 "$ROOT_DIR/vm1/install.sh" --target-dir "$VM1_TARGET_DIR" --skip-deps > "$VM1_LOG" 2>&1; then
     INSTALL_OK=1
-    rm -f "$VM1_LOG"
+    safe_delete_path "$VM1_LOG"
 else
     echo "  [DEBUG] vm1/install.sh output:" >&2
     cat "$VM1_LOG" >&2
-    rm -f "$VM1_LOG"
+    safe_delete_path "$VM1_LOG"
 fi
 
 if [ $INSTALL_OK -eq 1 ]; then
@@ -348,7 +469,9 @@ else
         fail "Stale archive was not removed before generation failure"
     fi
 fi
-rm -rf "$VM1_TARGET_DIR" "$VM1_OUT_DIR" "$VM1_BASHRC"
+safe_delete_path "$VM1_TARGET_DIR"
+safe_delete_path "$VM1_OUT_DIR"
+safe_delete_path "$VM1_BASHRC"
 
 # -----------------------------------------------------------------------------
 # Test 4: PowerShell 5.1 AST Syntax Compatibility (Rejecting PS7+ constructs)
@@ -402,7 +525,8 @@ fi
 # Test 5: Discrete Argument Preservation with Spaces in Live Mock SSH/SCP
 # -----------------------------------------------------------------------------
 section "PowerShell Discrete Argument Preservation with Spaces (Mock SSH/SCP via pwsh)"
-MOCK_SPACES_DIR=$(mktemp -d "/tmp/pipejack-mock-spaces-XXXXXX")
+MOCK_SPACES_DIR=$(mktemp -d "/tmp/pipejack-mock-spaces-XXXXXX") || { echo "[-] Failed to create mock spaces dir" >&2; exit 1; }
+register_test_path "$MOCK_SPACES_DIR"
 
 cat << 'EOF' > "$MOCK_SPACES_DIR/ssh"
 #!/usr/bin/env bash
@@ -430,7 +554,8 @@ exit 0
 EOF
 chmod +x "$MOCK_SPACES_DIR/scp"
 
-DIR_SPACES=$(mktemp -d "/tmp/pipejack test kit spaces XXXXXX")
+DIR_SPACES=$(mktemp -d "/tmp/pipejack test kit spaces XXXXXX") || { echo "[-] Failed to create spaces kit dir" >&2; exit 1; }
+register_test_path "$DIR_SPACES"
 mkdir -p "$DIR_SPACES/vm1" "$DIR_SPACES/vm2"
 KEY_SPACES="$DIR_SPACES/my keys dir/id_ed25519"
 mkdir -p "$(dirname "$KEY_SPACES")"
@@ -463,13 +588,15 @@ if command -v pwsh >/dev/null 2>&1; then
 else
     fail "pwsh not available for mock spaces argument verification"
 fi
-rm -rf "$MOCK_SPACES_DIR" "$DIR_SPACES"
+safe_delete_path "$MOCK_SPACES_DIR"
+safe_delete_path "$DIR_SPACES"
 
 # -----------------------------------------------------------------------------
 # Test 6: Behavioral Remote Sudo Detection, Interactive Escalation & Error Propagation
 # -----------------------------------------------------------------------------
 section "Behavioral Remote Sudo Detection, Escalation & Error Propagation"
-MOCK_SSH_DIR=$(mktemp -d "/tmp/pipejack-mock-ssh-XXXXXX")
+MOCK_SSH_DIR=$(mktemp -d "/tmp/pipejack-mock-ssh-XXXXXX") || { echo "[-] Failed to create mock ssh dir" >&2; exit 1; }
+register_test_path "$MOCK_SSH_DIR"
 
 cat << 'EOF' > "$MOCK_SSH_DIR/ssh"
 #!/usr/bin/env bash
@@ -549,7 +676,7 @@ if [ $SUDO_TESTS_OK -eq 1 ]; then
 else
     fail "Behavioral sudo test suite encountered failures"
 fi
-rm -rf "$MOCK_SSH_DIR"
+safe_delete_path "$MOCK_SSH_DIR"
 
 # -----------------------------------------------------------------------------
 # Test 7: Behavioral Demo Console Security Controls (Ephemeral Server Test)
@@ -665,7 +792,8 @@ fi
 # Test 8: Production Helper Module Verification (demo-status-helper.sh) & Installer Hardening
 # -----------------------------------------------------------------------------
 section "Production Helper Module Verification (demo-status-helper.sh) & Installer Hardening"
-TMP_VM2_TEST_DIR=$(mktemp -d "/tmp/pipejack-test-vm2-status-XXXXXX")
+TMP_VM2_TEST_DIR=$(mktemp -d "/tmp/pipejack-test-vm2-status-XXXXXX") || { echo "[-] Failed to create test vm2 status dir" >&2; exit 1; }
+register_test_path "$TMP_VM2_TEST_DIR"
 
 # Verify production installer has removed --test-demo-status CLI interface
 INSTALLER_CLI_CHECK=$("$ROOT_DIR/vm2/install.sh" --test-demo-status "$TMP_VM2_TEST_DIR" 2>&1 || true)
@@ -735,7 +863,7 @@ if [ $VM2_STATUS_OK -eq 1 ]; then
 else
     fail "demo-status-helper.sh validation failed"
 fi
-rm -rf "$TMP_VM2_TEST_DIR"
+safe_delete_path "$TMP_VM2_TEST_DIR"
 
 # -----------------------------------------------------------------------------
 # Test 9: Go Unit Tests and Code Inspection (go vet)
@@ -751,7 +879,8 @@ fi
 # Test 10: Ed25519 Attestation Key Generation & Verification
 # -----------------------------------------------------------------------------
 section "Ed25519 Attestation Key Generation & Cryptographic Verification"
-TMP_TEST_KEY_DIR=$(mktemp -d "/tmp/pipejack-test-keys-XXXXXX")
+TMP_TEST_KEY_DIR=$(mktemp -d "/tmp/pipejack-test-keys-XXXXXX") || { echo "[-] Failed to create test key dir" >&2; exit 1; }
+register_test_path "$TMP_TEST_KEY_DIR"
 
 export PIPEJACK_KEY_PATH="$TMP_TEST_KEY_DIR/attest-key"
 KEY_INIT_OUT=$(cd "$ROOT_DIR/vm2/services/custom-ci" && go run . --init-key 2>&1)
@@ -766,7 +895,7 @@ if echo "$KEY_INIT_OUT" | grep -q "cryptographically verified" && echo "$KEY_VER
 else
     fail "Key init or verify output unexpected: $KEY_INIT_OUT / $KEY_VERIFY_OUT"
 fi
-rm -rf "$TMP_TEST_KEY_DIR"
+safe_delete_path "$TMP_TEST_KEY_DIR"
 
 # -----------------------------------------------------------------------------
 # Test 11: Systemd Service Unit Syntax Verification
@@ -784,7 +913,149 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# Test 12: Final Host /tmp Namespace Preservation Verification
+# Test 12: Trap Cleanup Safety Against Pre-Populated / Hostile Environment Variables
+# -----------------------------------------------------------------------------
+section "Trap Cleanup Safety Against Pre-Populated / Hostile Environment Variables"
+
+HOSTILE_SENTINEL_DIR=$(mktemp -d "/tmp/pipejack-hostile-sentinel-XXXXXX") || { echo "[-] Failed to create hostile sentinel dir" >&2; exit 1; }
+register_test_path "$HOSTILE_SENTINEL_DIR"
+echo "IMMUTABLE_SENTINEL_CONTENT_$$" > "$HOSTILE_SENTINEL_DIR/sentinel.data"
+
+# Subtest A: Execute a subshell with pre-populated variables pointing to HOSTILE_SENTINEL_DIR
+# Verifies that hostile/pre-populated environment variables cannot trick trap cleanup into deleting unrecorded paths
+SUB_OUTPUT=$(bash -c "
+    set -uo pipefail
+    SCRIPT_DIR=\"$SCRIPT_DIR\"
+    ROOT_DIR=\"$ROOT_DIR\"
+    # Hostile injection: caller exports paths pointing to unrelated directories
+    export TEST_SPACES_OUT=\"$HOSTILE_SENTINEL_DIR\"
+    export TEST_REL_OUT=\"$HOSTILE_SENTINEL_DIR\"
+    export VM1_TARGET_DIR=\"$HOSTILE_SENTINEL_DIR\"
+    export VM1_OUT_DIR=\"$HOSTILE_SENTINEL_DIR\"
+    export TMP_VM2_TEST_DIR=\"$HOSTILE_SENTINEL_DIR\"
+    export PRE_EXISTING_SAFETY_DIR=\"$HOSTILE_SENTINEL_DIR\"
+
+    # Unset cleanup variables before trap registration
+    unset TEST_SPACES_OUT TEST_REL_OUT TEST_REL_OUT_RAW PRE_EXISTING_SAFETY_DIR
+    unset VM1_TARGET_DIR VM1_OUT_DIR VM1_BASHRC VM1_LOG
+    unset MOCK_SPACES_DIR DIR_SPACES MOCK_SSH_DIR TMP_VM2_TEST_DIR TMP_TEST_KEY_DIR
+
+    declare -A CREATED_TEST_PATHS=()
+    register_test_path() { local p=\"\$1\"; [ -n \"\$p\" ] && CREATED_TEST_PATHS[\"\$p\"]=1; }
+    safe_delete_path() {
+        local p=\"\$1\"
+        [ -n \"\$p\" ] || return 0
+        [ \"\${CREATED_TEST_PATHS[\"\$p\"]:-0}\" -eq 1 ] || return 0
+        [ -e \"\$p\" ] || return 0
+        local uid; uid=\$(stat -c '%u' \"\$p\" 2>/dev/null || echo -1)
+        [ \"\$uid\" -eq \"\$(id -u)\" ] || return 0
+        rm -rf \"\$p\"
+    }
+    cleanup_suite_traps() {
+        for p in \"\${!CREATED_TEST_PATHS[@]}\"; do
+            safe_delete_path \"\$p\"
+        done
+    }
+    trap cleanup_suite_traps EXIT
+
+    # Create a legitimate test path that SHOULD be cleaned up
+    LEGIT_TMP=\$(mktemp -d \"/tmp/pipejack-legit-tmp-XXXXXX\")
+    register_test_path \"\$LEGIT_TMP\"
+    echo \"LEGIT_CREATED:\$LEGIT_TMP\"
+    exit 0
+" 2>&1)
+
+LEGIT_PATH=$(echo "$SUB_OUTPUT" | grep "^LEGIT_CREATED:" | cut -d: -f2)
+
+TRAP_SAFETY_OK=1
+
+# 1. Verify hostile sentinel directory was NOT deleted
+if [ ! -d "$HOSTILE_SENTINEL_DIR" ] || [ ! -f "$HOSTILE_SENTINEL_DIR/sentinel.data" ]; then
+    TRAP_SAFETY_OK=0
+    echo "  [-] Hostile sentinel directory was deleted by trap cleanup!" >&2
+elif [ "$(cat "$HOSTILE_SENTINEL_DIR/sentinel.data")" != "IMMUTABLE_SENTINEL_CONTENT_$$" ]; then
+    TRAP_SAFETY_OK=0
+    echo "  [-] Hostile sentinel data was altered!" >&2
+fi
+
+# 2. Verify legitimate test path WAS cleaned up
+if [ -n "$LEGIT_PATH" ] && [ -d "$LEGIT_PATH" ]; then
+    TRAP_SAFETY_OK=0
+    echo "  [-] Legitimate test temporary directory was not cleaned up: $LEGIT_PATH" >&2
+    rm -rf "$LEGIT_PATH"
+fi
+
+# Subtest B: Signal termination (SIGINT) terminates immediately and cleans only registered paths
+SIG_OUTPUT=$(python3 -c '
+import subprocess, os
+
+test_script = """
+set -uo pipefail
+declare -A CREATED_TEST_PATHS=()
+register_test_path() { local p="$1"; [ -n "$p" ] && CREATED_TEST_PATHS["$p"]=1; }
+safe_delete_path() {
+    local p="$1"
+    [ -n "$p" ] || return 0
+    [ "${CREATED_TEST_PATHS["$p"]:-0}" -eq 1 ] || return 0
+    [ -e "$p" ] || return 0
+    rm -rf "$p"
+    unset "CREATED_TEST_PATHS[$p]"
+}
+cleanup_suite_traps() {
+    for p in "${!CREATED_TEST_PATHS[@]}"; do
+        safe_delete_path "$p"
+    done
+}
+handle_signal() {
+    local sig="$1"
+    trap - EXIT INT TERM HUP
+    cleanup_suite_traps
+    case "$sig" in
+        INT)  exit 130 ;;
+        TERM) exit 143 ;;
+        HUP)  exit 129 ;;
+        *)    exit 1 ;;
+    esac
+}
+trap "handle_signal INT" INT
+trap cleanup_suite_traps EXIT
+
+INT_TMP=$(mktemp -d "/tmp/pipejack-int-tmp-XXXXXX")
+register_test_path "$INT_TMP"
+echo "INT_TMP:$INT_TMP"
+
+# Send INT to the subshell itself ($$ is child PID)
+kill -INT $$
+echo "SHOULD_NOT_REACH_HERE"
+"""
+
+res = subprocess.run(["bash", "-c", test_script], capture_output=True, text=True)
+int_tmp = None
+for line in res.stdout.splitlines():
+    if line.startswith("INT_TMP:"):
+        int_tmp = line.split(":", 1)[1]
+
+cleaned = "YES" if (int_tmp and not os.path.exists(int_tmp)) else "NO"
+unreached = "YES" if "SHOULD_NOT_REACH_HERE" not in res.stdout else "NO"
+print(f"RC:{res.returncode}|CLEANED:{cleaned}|UNREACHED:{unreached}|PATH:{int_tmp}")
+' 2>&1)
+
+if ! echo "$SIG_OUTPUT" | grep -q "RC:130" || ! echo "$SIG_OUTPUT" | grep -q "CLEANED:YES" || ! echo "$SIG_OUTPUT" | grep -q "UNREACHED:YES"; then
+    TRAP_SAFETY_OK=0
+    echo "  [-] Signal termination safety test failed: $SIG_OUTPUT" >&2
+fi
+
+# Clean up sentinel directory safely
+safe_delete_path "$HOSTILE_SENTINEL_DIR"
+
+if [ $TRAP_SAFETY_OK -eq 1 ]; then
+    pass "Trap cleanup safety verified: pre-populated hostile environment variables cannot trigger deletion, signals terminate immediately with proper exit codes, and only registered paths are removed"
+else
+    fail "Trap cleanup safety regression test failed"
+fi
+
+# -----------------------------------------------------------------------------
+# Test 13: Final Host /tmp Namespace Preservation Verification
 # -----------------------------------------------------------------------------
 section "Final Host /tmp Namespace Preservation Verification"
 FINAL_CANARY_OK=1
