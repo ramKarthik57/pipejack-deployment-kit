@@ -25,7 +25,7 @@
 | `shared/templates/01-netplan-vm2.yaml.example` | 498 | `0644` | Root / Shared | `1ccffbb5653831239e011077b644e794b8848d6f9571ef9a27fb83f6d2aee43a` |
 | `shared/templates/hosts.example` | 155 | `0644` | Root / Shared | `27baa2f36776d67d9bb6330371f8c5d7b538bfde3aa6c05f74c353436cc34e36` |
 | `tests/smoke-test.sh` | 5757 | `0755` | Testing / CI | `d8ea4cd1d742de739c4aaa0f043e9300f43b52510ce92347d94953fae1dac4e5` |
-| `tests/test-fresh-install-blockers.sh` | 123660 | `0775` | Testing / CI | `5e1fe89d7665eee0c922cbbc3bf99bdafd0f65de1410989bd50a40ed557e3235` |
+| `tests/test-fresh-install-blockers.sh` | 127997 | `0775` | Testing / CI | `bab9efd83082e9296f6590b6bb9a93599fc5d4adec1695366a042a71580b5357` |
 | `tests/validate-installers.sh` | 6182 | `0775` | Testing / CI | `804aad743bd20f21b65fe44a13d3015909934ad81a8c5056b1d45a9cf56ae504` |
 | `tests/validate-layout.sh` | 6313 | `0755` | Testing / CI | `13f7ca85f117fee8ce619f8ce0515f699b29c709fc8e2f4f09d4b0683de6af47` |
 | `vm1/README.md` | 4720 | `0664` | VM1 (Client) | `fdbb1d628cfdc29c042046084649fcb9b293f9504955c630938ade53ff495d78` |
@@ -1358,6 +1358,6 @@
 | `vm2/services/custom-ci/quarantine_test.go` | 7601 | `0644` | VM2 (Server) | `5f2c60ab758f893c7886188a9c7128b64399b97c0e906ffd44650758176681d6` |
 | `vm2/services/custom-ci/verify-attest.go` | 3023 | `0644` | VM2 (Server) | `72be4d7b9852946a3cefbc859d0da170a9705e6d7899e7e8ef1139e9f656cde6` |
 | `windows/README.md` | 4535 | `0664` | Windows Host | `00af7f86f81d406fbb14951fce43e7ee5821f8c5a56e329eb1efddb1ccece270` |
-| `windows/preflight.ps1` | 6069 | `0664` | Windows Host | `312c2325eeeb56ac227dc0d09f4535ca90c3b5c408f5685b576fac2c3653378d` |
+| `windows/preflight.ps1` | 6067 | `0664` | Windows Host | `a7f27fbd7f6ceb222b483a8e093128dd9c9b3c89e9ae8c94bc70871797561751` |
 | `windows/setup-pipejack.ps1` | 16570 | `0664` | Windows Host | `bf37c05251348e70a9539712f7c6890921ecbc5d9a5d3cffec9a3144921ff6cc` |
-| `windows/verify-pipejack.ps1` | 7682 | `0664` | Windows Host | `3af601417c806bc24313e0f6ecd64633b730dfeed2af9dd416a7384b7f7c684c` |
+| `windows/verify-pipejack.ps1` | 7674 | `0664` | Windows Host | `86de940e8ddb45a3133f33b96bf99229177bc9c4f026c101026e043cfe5c4234` |

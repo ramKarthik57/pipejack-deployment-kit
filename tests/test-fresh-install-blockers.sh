@@ -1261,6 +1261,7 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Test 5: Discrete Argument Preservation with Spaces in Live Mock SSH/SCP
 # -----------------------------------------------------------------------------
 section "PowerShell Discrete Argument Preservation with Spaces (Mock SSH/SCP via pwsh)"
@@ -1270,9 +1271,11 @@ register_test_path "$MOCK_SPACES_DIR"
 cat << 'EOF' > "$MOCK_SPACES_DIR/ssh"
 #!/usr/bin/env bash
 LOGFILE="$(dirname "$0")/ssh_args.log"
-printf "%s\n" "--- EXEC ssh ($# args) ---" >> "$LOGFILE"
+echo "--- EXEC ssh ---" >> "$LOGFILE"
+arg_idx=1
 for arg in "$@"; do
-    printf "ARG: [%s]\n" "$arg" >> "$LOGFILE"
+    printf "ARG_%d: [%s]\n" "$arg_idx" "$arg" >> "$LOGFILE"
+    ((arg_idx++))
 done
 CMD="${@: -1}"
 if [[ "$CMD" == *"sudo -n true"* ]]; then
@@ -1281,17 +1284,21 @@ fi
 exit 0
 EOF
 chmod +x "$MOCK_SPACES_DIR/ssh"
+ln -sf "$MOCK_SPACES_DIR/ssh" "$MOCK_SPACES_DIR/ssh.exe"
 
 cat << 'EOF' > "$MOCK_SPACES_DIR/scp"
 #!/usr/bin/env bash
 LOGFILE="$(dirname "$0")/scp_args.log"
-printf "%s\n" "--- EXEC scp ($# args) ---" >> "$LOGFILE"
+echo "--- EXEC scp ---" >> "$LOGFILE"
+arg_idx=1
 for arg in "$@"; do
-    printf "ARG: [%s]\n" "$arg" >> "$LOGFILE"
+    printf "ARG_%d: [%s]\n" "$arg_idx" "$arg" >> "$LOGFILE"
+    ((arg_idx++))
 done
 exit 0
 EOF
 chmod +x "$MOCK_SPACES_DIR/scp"
+ln -sf "$MOCK_SPACES_DIR/scp" "$MOCK_SPACES_DIR/scp.exe"
 
 DIR_SPACES=$(mktemp -d "/tmp/pipejack test kit spaces XXXXXX") || { echo "[-] Failed to create spaces kit dir" >&2; exit 1; }
 register_test_path "$DIR_SPACES"
@@ -1301,28 +1308,58 @@ mkdir -p "$(dirname "$KEY_SPACES")"
 touch "$KEY_SPACES"
 
 if command -v pwsh >/dev/null 2>&1; then
-    PATH="$MOCK_SPACES_DIR:$PATH" pwsh -NoProfile -Command "
-        & '$ROOT_DIR/windows/setup-pipejack.ps1' -KitDir '$DIR_SPACES' -SSHKey '$KEY_SPACES' -VM2_IP 192.168.88.133 -VM1_IP 192.168.88.132 -SSHUser testuser -SkipPreflight -SkipVM1 -Force
-    " >/dev/null 2>&1 || true
+    # Verify that SSH and SCP resolve strictly to the mock directory before execution
+    RESOLVED_SSH=$(PATH="$MOCK_SPACES_DIR:$PATH" pwsh -NoProfile -Command "
+        \$c = Get-Command 'ssh.exe' -ErrorAction SilentlyContinue
+        if (-not \$c) { \$c = Get-Command 'ssh' -ErrorAction SilentlyContinue }
+        if (\$c) { \$c.Source }
+    " 2>/dev/null || true)
+    RESOLVED_SCP=$(PATH="$MOCK_SPACES_DIR:$PATH" pwsh -NoProfile -Command "
+        \$c = Get-Command 'scp.exe' -ErrorAction SilentlyContinue
+        if (-not \$c) { \$c = Get-Command 'scp' -ErrorAction SilentlyContinue }
+        if (\$c) { \$c.Source }
+    " 2>/dev/null || true)
 
-    SPACES_ARG_OK=1
-
-    # Check that SCP received the target directory containing spaces as a single discrete argument
-    if ! grep -qF "ARG: [$DIR_SPACES/vm2]" "$MOCK_SPACES_DIR/scp_args.log" && ! grep -qF "ARG: [$DIR_SPACES\vm2]" "$MOCK_SPACES_DIR/scp_args.log"; then
-        SPACES_ARG_OK=0
-        echo "  [-] SCP failed to receive kit path containing spaces as a single discrete argument" >&2
-    fi
-
-    # Check that SSH received the private key containing spaces as a single discrete argument
-    if ! grep -qF "ARG: [$KEY_SPACES]" "$MOCK_SPACES_DIR/ssh_args.log"; then
-        SPACES_ARG_OK=0
-        echo "  [-] SSH failed to receive private key path containing spaces as a single discrete argument" >&2
-    fi
-
-    if [ $SPACES_ARG_OK -eq 1 ]; then
-        pass "Mock SSH/SCP confirmed discrete argument preservation for paths containing spaces under live pwsh execution"
+    if [[ "$RESOLVED_SSH" != "$MOCK_SPACES_DIR"* ]] || [[ "$RESOLVED_SCP" != "$MOCK_SPACES_DIR"* ]]; then
+        fail "Pre-flight executable check failed: SSH/SCP did not resolve to mock directory (SSH: '$RESOLVED_SSH', SCP: '$RESOLVED_SCP')"
     else
-        fail "PowerShell argument array passing split arguments containing spaces"
+        rm -f "$MOCK_SPACES_DIR/ssh_args.log" "$MOCK_SPACES_DIR/scp_args.log"
+        pwsh_ec=0
+        OUT_5=$(PATH="$MOCK_SPACES_DIR:$PATH" pwsh -NoProfile -Command "
+            & '$ROOT_DIR/windows/setup-pipejack.ps1' -KitDir '$DIR_SPACES' -SSHKey '$KEY_SPACES' -VM2_IP 127.0.0.2 -VM1_IP 127.0.0.1 -SSHUser testuser -SkipPreflight -SkipVM1 -SkipVerify -Force
+        " 2>&1) || pwsh_ec=$?
+
+        SPACES_ARG_OK=1
+
+        # Check process exit code
+        if [ $pwsh_ec -ne 0 ]; then
+            SPACES_ARG_OK=0
+            echo "  [-] pwsh process exited with non-zero exit code $pwsh_ec: $OUT_5" >&2
+        fi
+
+        # Check that mock logs exist and were invoked
+        if [ ! -s "$MOCK_SPACES_DIR/scp_args.log" ] || [ ! -s "$MOCK_SPACES_DIR/ssh_args.log" ]; then
+            SPACES_ARG_OK=0
+            echo "  [-] Mock tools were not invoked (logs empty or missing)" >&2
+        fi
+
+        # Check that SCP received the target directory containing spaces as a single discrete argument
+        if ! grep -q -E "^ARG_[0-9]+: \[${DIR_SPACES}/vm2\]$" "$MOCK_SPACES_DIR/scp_args.log" && ! grep -q -E "^ARG_[0-9]+: \[${DIR_SPACES}\\\\vm2\]$" "$MOCK_SPACES_DIR/scp_args.log"; then
+            SPACES_ARG_OK=0
+            echo "  [-] SCP failed to receive kit path containing spaces as a single discrete argument" >&2
+        fi
+
+        # Check that SSH received the private key containing spaces as a single discrete argument
+        if ! grep -q -E "^ARG_[0-9]+: \[${KEY_SPACES}\]$" "$MOCK_SPACES_DIR/ssh_args.log"; then
+            SPACES_ARG_OK=0
+            echo "  [-] SSH failed to receive private key path containing spaces as a single discrete argument" >&2
+        fi
+
+        if [ $SPACES_ARG_OK -eq 1 ]; then
+            pass "Mock SSH/SCP confirmed discrete argument preservation for paths containing spaces under live pwsh execution (exit code: $pwsh_ec)"
+        else
+            fail "PowerShell argument array passing split arguments containing spaces or failed execution"
+        fi
     fi
 else
     fail "pwsh not available for mock spaces argument verification"
@@ -1340,7 +1377,12 @@ register_test_path "$MOCK_SSH_DIR"
 cat << 'EOF' > "$MOCK_SSH_DIR/ssh"
 #!/usr/bin/env bash
 LOGFILE="$(dirname "$0")/ssh.log"
-echo "MOCK_SSH_ARGS: $@" >> "$LOGFILE"
+echo "--- EXEC ssh ---" >> "$LOGFILE"
+arg_idx=1
+for arg in "$@"; do
+    printf "ARG_%d: [%s]\n" "$arg_idx" "$arg" >> "$LOGFILE"
+    ((arg_idx++))
+done
 CMD="${@: -1}"
 
 if [[ "$CMD" == *"sudo -n true"* ]]; then
@@ -1359,61 +1401,96 @@ fi
 exit 0
 EOF
 chmod +x "$MOCK_SSH_DIR/ssh"
+ln -sf "$MOCK_SSH_DIR/ssh" "$MOCK_SSH_DIR/ssh.exe"
 
 cat << 'EOF' > "$MOCK_SSH_DIR/scp"
 #!/usr/bin/env bash
 LOGFILE="$(dirname "$0")/scp.log"
-echo "MOCK_SCP_ARGS: $@" >> "$LOGFILE"
+echo "--- EXEC scp ---" >> "$LOGFILE"
+arg_idx=1
+for arg in "$@"; do
+    printf "ARG_%d: [%s]\n" "$arg_idx" "$arg" >> "$LOGFILE"
+    ((arg_idx++))
+done
 exit 0
 EOF
 chmod +x "$MOCK_SSH_DIR/scp"
+ln -sf "$MOCK_SSH_DIR/scp" "$MOCK_SSH_DIR/scp.exe"
 
-SUDO_TESTS_OK=1
+if command -v pwsh >/dev/null 2>&1; then
+    # Verify that SSH and SCP resolve strictly to the mock directory before execution
+    RESOLVED_SSH_6=$(PATH="$MOCK_SSH_DIR:$PATH" pwsh -NoProfile -Command "
+        \$c = Get-Command 'ssh.exe' -ErrorAction SilentlyContinue
+        if (-not \$c) { \$c = Get-Command 'ssh' -ErrorAction SilentlyContinue }
+        if (\$c) { \$c.Source }
+    " 2>/dev/null || true)
+    RESOLVED_SCP_6=$(PATH="$MOCK_SSH_DIR:$PATH" pwsh -NoProfile -Command "
+        \$c = Get-Command 'scp.exe' -ErrorAction SilentlyContinue
+        if (-not \$c) { \$c = Get-Command 'scp' -ErrorAction SilentlyContinue }
+        if (\$c) { \$c.Source }
+    " 2>/dev/null || true)
 
-# Subtest A: Passwordless sudo succeeds cleanly
-rm -f "$MOCK_SSH_DIR/ssh.log"
-OUT_A=$(PATH="$MOCK_SSH_DIR:$PATH" MOCK_SUDO_MODE="passwordless" pwsh -NoProfile -Command "
-    & '$ROOT_DIR/windows/setup-pipejack.ps1' -VM2_IP 192.168.88.133 -VM1_IP 192.168.88.132 -SSHUser testuser -SkipPreflight -SkipVM1 -Force
-" 2>&1 || true)
-if ! echo "$OUT_A" | grep -q "Creating isolated staging directory"; then
-    SUDO_TESTS_OK=0
-    echo "  [-] Passwordless sudo test failed" >&2
-fi
+    if [[ "$RESOLVED_SSH_6" != "$MOCK_SSH_DIR"* ]] || [[ "$RESOLVED_SCP_6" != "$MOCK_SSH_DIR"* ]]; then
+        fail "Pre-flight executable check failed: SSH/SCP did not resolve to mock directory (SSH: '$RESOLVED_SSH_6', SCP: '$RESOLVED_SCP_6')"
+    else
+        SUDO_TESTS_OK=1
 
-# Subtest B: Password-required without -InteractiveSudo fails early with exit code 1 and prints guidance
-rm -f "$MOCK_SSH_DIR/ssh.log"
-OUT_B=$(PATH="$MOCK_SSH_DIR:$PATH" MOCK_SUDO_MODE="password_required" pwsh -NoProfile -Command "
-    & '$ROOT_DIR/windows/setup-pipejack.ps1' -VM2_IP 192.168.88.133 -VM1_IP 192.168.88.132 -SSHUser testuser -SkipPreflight -SkipVM1 -Force
-" 2>&1 || true)
-if ! echo "$OUT_B" | grep -q "PREFLIGHT PRIVILEGE ERROR" || ! echo "$OUT_B" | grep -q "NOPASSWD:ALL" || ! echo "$OUT_B" | grep -q -- "-InteractiveSudo"; then
-    SUDO_TESTS_OK=0
-    echo "  [-] Password-required guidance test failed" >&2
-fi
+        # Subtest A: Passwordless sudo succeeds cleanly
+        rm -f "$MOCK_SSH_DIR/ssh.log" "$MOCK_SSH_DIR/scp.log"
+        ec_A=0
+        OUT_A=$(PATH="$MOCK_SSH_DIR:$PATH" MOCK_SUDO_MODE="passwordless" pwsh -NoProfile -Command "
+            & '$ROOT_DIR/windows/setup-pipejack.ps1' -VM2_IP 127.0.0.2 -VM1_IP 127.0.0.1 -SSHUser testuser -SkipPreflight -SkipVM1 -SkipVerify -Force
+        " 2>&1) || ec_A=$?
+        if [ $ec_A -ne 0 ] || ! echo "$OUT_A" | grep -q "Creating isolated staging directory" || [ ! -s "$MOCK_SSH_DIR/ssh.log" ]; then
+            SUDO_TESTS_OK=0
+            echo "  [-] Passwordless sudo test failed (process exit code: $ec_A)" >&2
+        fi
 
-# Subtest C: Password-required with -InteractiveSudo passes -t to SSH
-rm -f "$MOCK_SSH_DIR/ssh.log"
-OUT_C=$(PATH="$MOCK_SSH_DIR:$PATH" MOCK_SUDO_MODE="password_required" pwsh -NoProfile -Command "
-    & '$ROOT_DIR/windows/setup-pipejack.ps1' -VM2_IP 192.168.88.133 -VM1_IP 192.168.88.132 -SSHUser testuser -SkipPreflight -SkipVM1 -Force -InteractiveSudo
-" 2>&1 || true)
-if ! echo "$OUT_C" | grep -q "Interactive sudo mode active" || ! grep -q -- "-t" "$MOCK_SSH_DIR/ssh.log"; then
-    SUDO_TESTS_OK=0
-    echo "  [-] Interactive sudo -t allocation test failed" >&2
-fi
+        # Subtest B: Password-required without -InteractiveSudo fails early with exit code 1 and prints guidance before any transfer
+        rm -f "$MOCK_SSH_DIR/ssh.log" "$MOCK_SSH_DIR/scp.log"
+        ec_B=0
+        OUT_B=$(PATH="$MOCK_SSH_DIR:$PATH" MOCK_SUDO_MODE="password_required" pwsh -NoProfile -Command "
+            & '$ROOT_DIR/windows/setup-pipejack.ps1' -VM2_IP 127.0.0.2 -VM1_IP 127.0.0.1 -SSHUser testuser -SkipPreflight -SkipVM1 -SkipVerify -Force
+        " 2>&1) || ec_B=$?
+        if [ $ec_B -ne 1 ] || ! echo "$OUT_B" | grep -q "PREFLIGHT PRIVILEGE ERROR" || ! echo "$OUT_B" | grep -q "NOPASSWD:ALL" || ! echo "$OUT_B" | grep -q -- "-InteractiveSudo"; then
+            SUDO_TESTS_OK=0
+            echo "  [-] Password-required guidance test failed (process exit code: $ec_B)" >&2
+        fi
+        if [ -s "$MOCK_SSH_DIR/scp.log" ] || grep -q "install.sh" "$MOCK_SSH_DIR/ssh.log" 2>/dev/null; then
+            SUDO_TESTS_OK=0
+            echo "  [-] Password-required mode attempted SCP or remote installation before privilege validation" >&2
+        fi
 
-# Subtest D: Remote command failure propagates exit code
-rm -f "$MOCK_SSH_DIR/ssh.log"
-OUT_D=$(PATH="$MOCK_SSH_DIR:$PATH" MOCK_SUDO_MODE="passwordless" MOCK_CMD_FAIL="42" pwsh -NoProfile -Command "
-    & '$ROOT_DIR/windows/setup-pipejack.ps1' -VM2_IP 192.168.88.133 -VM1_IP 192.168.88.132 -SSHUser testuser -SkipPreflight -SkipVM1 -Force
-" 2>&1 || true)
-if ! echo "$OUT_D" | grep -q "Exit Code: 42"; then
-    SUDO_TESTS_OK=0
-    echo "  [-] Remote command exit code propagation test failed" >&2
-fi
+        # Subtest C: Password-required with -InteractiveSudo passes -t to SSH
+        rm -f "$MOCK_SSH_DIR/ssh.log" "$MOCK_SSH_DIR/scp.log"
+        ec_C=0
+        OUT_C=$(PATH="$MOCK_SSH_DIR:$PATH" MOCK_SUDO_MODE="password_required" pwsh -NoProfile -Command "
+            & '$ROOT_DIR/windows/setup-pipejack.ps1' -VM2_IP 127.0.0.2 -VM1_IP 127.0.0.1 -SSHUser testuser -SkipPreflight -SkipVM1 -SkipVerify -Force -InteractiveSudo
+        " 2>&1) || ec_C=$?
+        if [ $ec_C -ne 0 ] || ! echo "$OUT_C" | grep -q "Interactive sudo mode active" || ! grep -q -E '^ARG_[0-9]+: \[-t\]$' "$MOCK_SSH_DIR/ssh.log"; then
+            SUDO_TESTS_OK=0
+            echo "  [-] Interactive sudo -t allocation test failed (process exit code: $ec_C)" >&2
+        fi
 
-if [ $SUDO_TESTS_OK -eq 1 ]; then
-    pass "Behavioral mock SSH proved: passwordless ok, password-required guidance, interactive -t allocation, and exit code 42 propagation"
+        # Subtest D: Remote command failure propagates exit code
+        rm -f "$MOCK_SSH_DIR/ssh.log" "$MOCK_SSH_DIR/scp.log"
+        ec_D=0
+        OUT_D=$(PATH="$MOCK_SSH_DIR:$PATH" MOCK_SUDO_MODE="passwordless" MOCK_CMD_FAIL="42" pwsh -NoProfile -Command "
+            & '$ROOT_DIR/windows/setup-pipejack.ps1' -VM2_IP 127.0.0.2 -VM1_IP 127.0.0.1 -SSHUser testuser -SkipPreflight -SkipVM1 -SkipVerify -Force
+        " 2>&1) || ec_D=$?
+        if [ $ec_D -ne 1 ] || ! echo "$OUT_D" | grep -q "Exit Code: 42"; then
+            SUDO_TESTS_OK=0
+            echo "  [-] Remote command exit code propagation test failed (process exit code: $ec_D)" >&2
+        fi
+
+        if [ $SUDO_TESTS_OK -eq 1 ]; then
+            pass "Behavioral mock SSH proved: passwordless ok (ec 0), password-required guidance (ec 1, no transfers), interactive -t allocation (ec 0), and remote exit code 42 diagnostics (process ec 1)"
+        else
+            fail "Behavioral sudo test suite encountered failures"
+        fi
+    fi
 else
-    fail "Behavioral sudo test suite encountered failures"
+    fail "pwsh not available for mock sudo behavioral verification"
 fi
 safe_delete_path "$MOCK_SSH_DIR"
 

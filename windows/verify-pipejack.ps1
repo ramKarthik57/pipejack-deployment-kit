@@ -5,9 +5,9 @@
 
 .DESCRIPTION
     Verifies the end-to-end operational state of the deployed PipeJack cluster:
-    1. CI Orchestrator Health Endpoint (:8888) — validates status: "ok"
-    2. Web Demo Console Status (:8090) — validates ci_healthy: true
-    3. Docker Registry API v2 (:5000) — validates HTTP 200 & API v2
+    1. CI Orchestrator Health Endpoint (:8888) - validates status: "ok"
+    2. Web Demo Console Status (:8090) - validates ci_healthy: true
+    3. Docker Registry API v2 (:5000) - validates HTTP 200 & API v2
     4. Workload Upload Execution & Attestation Ledger Verdict (VM1 -> VM2)
        Strictly verifies that a newly generated signed attestation record is
        committed to the VM2 cryptographic ledger with verdict ALLOW.
@@ -52,7 +52,7 @@ param(
 $ErrorActionPreference = "Continue"
 
 Write-Host "============================================================" -ForegroundColor Cyan
-Write-Host " PIPEJACK DEPLOYMENT KIT — POST-INSTALLATION VERIFICATION" -ForegroundColor Cyan
+Write-Host " PIPEJACK DEPLOYMENT KIT - POST-INSTALLATION VERIFICATION" -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan
 
 $Failures = 0

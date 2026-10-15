@@ -40,7 +40,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 Write-Host "============================================================" -ForegroundColor Cyan
-Write-Host " PIPEJACK DEPLOYMENT KIT — WINDOWS PREFLIGHT CHECK" -ForegroundColor Cyan
+Write-Host " PIPEJACK DEPLOYMENT KIT - WINDOWS PREFLIGHT CHECK" -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan
 
 # 1. Resolve Kit Directory
