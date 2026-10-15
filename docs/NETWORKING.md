@@ -7,17 +7,17 @@ PipeJack is designed with a dual-network interface architecture separating admin
 ```
 [ Host Machine (Windows / VMware Workstation) ]
        │                                     │
-       │ Host-Only Virtual Switch (VMnet8)   │ NAT Virtual Switch (VMnet1 / Default)
+       │ Host-Only Virtual Switch (VMnet1)   │ NAT Virtual Switch (VMnet8 / Default)
        │ Subnet: 192.168.88.0/24             │ Subnet: 192.168.152.0/24 (DHCP)
        │                                     │
        ▼                                     ▼
  ┌───────────────┐                     ┌───────────────┐
  │   VM1 Client  │                     │  VM2 Server   │
  │               │                     │               │
- │ ens33:        │◄─── Inter-VM ──────►│ ens33:        │
+ │ Private IF:   │◄─── Inter-VM ──────►│ Private IF:   │
  │ 192.168.88.132│    Private Lab Net  │ 192.168.88.133│
  │               │                     │               │
- │ ens37:        │                     │ ens37:        │
+ │ NAT IF:       │                     │ NAT IF:       │
  │ 192.168.152.x │                     │ 192.168.152.x │
  └───────────────┘                     └───────────────┘
 ```
@@ -26,29 +26,57 @@ PipeJack is designed with a dual-network interface architecture separating admin
 
 ## 2. Interface Responsibilities
 
-### 1. `ens33` — Private Inter-VM Lab Network (`192.168.88.0/24`)
-- **Type:** Host-Only or dedicated isolated virtual switch.
+### 1. Private Inter-VM Lab Interface (`192.168.88.0/24`)
+- **Interface Name:** Typically `ens33` or `ens34` (auto-detected).
+- **Static IP:** `192.168.88.132` (VM1 Client) | `192.168.88.133` (VM2 Server).
 - **Traffic Carried:**
   - Streaming build archive uploads: VM1 -> VM2 (`http://192.168.88.133:8888/upload`).
   - Inter-VM SSH administration (VM1 -> VM2 passwordless Ed25519 authentication).
   - Malicious attack simulation tests: All attack payloads (out-of-band socket exfiltration, reverse shells) are targeted against or contained within this network.
-- **Security Rule:** This interface should **never** have a default internet gateway. It is strictly for node-to-node communication.
+- **Security Rule:** This interface must **never** have a default internet gateway. It is strictly dedicated to inter-node communication.
 
-### 2. `ens37` — Management / NAT Interface (`192.168.152.0/24`)
-- **Type:** VMware NAT (provides default route via `192.168.152.2` with metric 101).
+### 2. Management / NAT Interface (`192.168.152.0/24` or DHCP)
+- **Interface Name:** Typically `ens37` or `ens38` (auto-detected).
+- **Route Metric:** `101` (higher priority default gateway).
 - **Traffic Carried:**
   - Ubuntu OS package updates (`apt-get install`).
   - Docker base image downloads (`maven:3.8`, `node:18`, `python:3.12`, `registry:2`).
-  - Access to the Web Demo Console from the Windows host browser (`http://192.168.88.133:8090` or `http://192.168.152.130:8090`).
+  - Access to the Web Demo Console from the Windows host browser (`http://192.168.88.133:8090`).
 
 ---
 
-## 3. Network Isolation and Security Invariants
+## 3. Automated Guest Network Bootstrapper (`bootstrap-network.sh`)
+
+To eliminate manual configuration errors and interface name guessing on fresh VMs, the kit includes `shared/bootstrap-network.sh`:
+
+```bash
+# On VM2 (Server Orchestrator):
+sudo bash shared/bootstrap-network.sh --role vm2
+
+# On VM1 (Workload Client):
+sudo bash shared/bootstrap-network.sh --role vm1
+```
+
+### Key Capabilities:
+1. **Dynamic Interface Auto-Discovery:**
+   Scans `/sys/class/net/*` (ignoring loopback, docker, and virtual bridges) to automatically identify which interface has the default route (NAT) and which adapter is connected to the Host-Only network.
+2. **Subnet Conflict Detection:**
+   Validates that the NAT interface is not mistakenly placed on `192.168.88.0/24`. If a conflict is detected, it aborts cleanly with remediation guidance before altering network settings.
+3. **Automated Configuration Backup:**
+   Backs up all existing `/etc/netplan/*.yaml` files to `/etc/netplan/pipejack-backup-<timestamp>/` and renames old configs with `.disabled` to prevent conflicting static routes.
+4. **Syntax Validation & Safe Rollback:**
+   Generates `/etc/netplan/01-pipejack-netcfg.yaml`, tests it using `netplan generate`, and only executes `netplan apply` if syntax verification passes. If `netplan generate` fails, it restores the backup automatically.
+5. **Dry-Run Preview:**
+   Allows previewing generated Netplan YAML without modifying host state via `--dry-run`.
+
+---
+
+## 4. Network Isolation and Security Invariants
 
 ### 1. Preventing Public Exposure
 The PipeJack services must remain restricted to private addresses:
 - **Port 8888 (`pipejack-ci`):** Ingests arbitrary code archives. Exposure to untrusted networks could allow arbitrary build execution.
-- **Port 8090 (`pipejack-demo-console`):** Contains unauthenticated WebSocket PTY terminal endpoints (`/ws/terminal/vm1` and `/ws/terminal/vm2`). Must only be accessible to authorized lab operators.
+- **Port 8090 (`pipejack-demo-console`):** Contains interactive WebSocket PTY terminal endpoints (`/ws/terminal/vm1` and `/ws/terminal/vm2`). Must only be accessible to authorized lab operators.
 - **Port 5000 (`registry:2`):** Docker registry for internal pipeline artifacts.
 
 ### 2. VMware Virtual Network Configuration
@@ -62,7 +90,7 @@ To replicate this network in VMware Workstation / Player:
 
 ---
 
-## 4. Port Forwarding and Remote Access Options
+## 5. Port Forwarding and Remote Access Options
 
 If you need to access the Demo Console from your host browser and the Host-Only network is not directly routable from Windows:
 

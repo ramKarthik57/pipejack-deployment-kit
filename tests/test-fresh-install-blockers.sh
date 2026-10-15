@@ -1219,6 +1219,7 @@ section "PowerShell 5.1 AST Syntax Compatibility (Static AST Verification)"
 if command -v pwsh >/dev/null 2>&1; then
     PS_CHECK_OUTPUT=$(pwsh -NoProfile -Command "
         \$scripts = @(
+            '$ROOT_DIR/windows/fresh-install.ps1',
             '$ROOT_DIR/windows/setup-pipejack.ps1',
             '$ROOT_DIR/windows/preflight.ps1',
             '$ROOT_DIR/windows/verify-pipejack.ps1'
@@ -3087,7 +3088,121 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# Test 13: Final Host /tmp Namespace Preservation Verification
+# Test 13: Guest Network Bootstrapper CLI & Interface Discovery (Isolated Tests)
+# -----------------------------------------------------------------------------
+section "Guest Network Bootstrapper CLI & Interface Discovery (Isolated Tests)"
+BOOTSTRAP_SCRIPT="$ROOT_DIR/shared/bootstrap-network.sh"
+BOOTSTRAP_TEST_OK=1
+
+# 1. Help flag test
+if "$BOOTSTRAP_SCRIPT" --help 2>&1 | grep -q "PipeJack Guest Network Bootstrap Utility"; then
+    echo "  [OK] bootstrap-network.sh --help executed cleanly."
+else
+    BOOTSTRAP_TEST_OK=0
+    echo "  [-] bootstrap-network.sh --help failed or missing header." >&2
+fi
+
+# 2. Missing role validation
+if "$BOOTSTRAP_SCRIPT" >/dev/null 2>&1; then
+    BOOTSTRAP_TEST_OK=0
+    echo "  [-] bootstrap-network.sh without arguments unexpectedly succeeded!" >&2
+else
+    echo "  [OK] bootstrap-network.sh without arguments correctly rejected with code 1."
+fi
+
+# 3. Invalid role validation
+if "$BOOTSTRAP_SCRIPT" --role invalid >/dev/null 2>&1; then
+    BOOTSTRAP_TEST_OK=0
+    echo "  [-] bootstrap-network.sh --role invalid unexpectedly succeeded!" >&2
+else
+    echo "  [OK] bootstrap-network.sh --role invalid correctly rejected with code 1."
+fi
+
+# 4. Dry-run preview for VM2
+VM2_PREVIEW=$("$BOOTSTRAP_SCRIPT" --role vm2 --dry-run 2>&1 || true)
+if echo "$VM2_PREVIEW" | grep -q "Target Role: VM2 (Server Orchestrator)" && echo "$VM2_PREVIEW" | grep -q "192.168.88.133" && echo "$VM2_PREVIEW" | grep -q "DRY-RUN PREVIEW COMPLETE"; then
+    echo "  [OK] bootstrap-network.sh --role vm2 --dry-run generated valid Netplan preview for 192.168.88.133."
+else
+    BOOTSTRAP_TEST_OK=0
+    echo "  [-] bootstrap-network.sh --role vm2 --dry-run failed to produce expected preview: $VM2_PREVIEW" >&2
+fi
+
+# 5. Dry-run preview for VM1
+VM1_PREVIEW=$("$BOOTSTRAP_SCRIPT" --role vm1 --dry-run 2>&1 || true)
+if echo "$VM1_PREVIEW" | grep -q "Target Role: VM1 (Workload Client)" && echo "$VM1_PREVIEW" | grep -q "192.168.88.132" && echo "$VM1_PREVIEW" | grep -q "DRY-RUN PREVIEW COMPLETE"; then
+    echo "  [OK] bootstrap-network.sh --role vm1 --dry-run generated valid Netplan preview for 192.168.88.132."
+else
+    BOOTSTRAP_TEST_OK=0
+    echo "  [-] bootstrap-network.sh --role vm1 --dry-run failed to produce expected preview: $VM1_PREVIEW" >&2
+fi
+
+if [ $BOOTSTRAP_TEST_OK -eq 1 ]; then
+    pass "Guest network bootstrapper passed isolated argument, validation, and dry-run preview tests"
+else
+    fail "Guest network bootstrapper failed isolated tests"
+fi
+
+# -----------------------------------------------------------------------------
+# Test 14: Fresh Two-VM Onboarding Installer Parameter Validation & Dry-Run (pwsh)
+# -----------------------------------------------------------------------------
+section "Fresh Two-VM Onboarding Installer Parameter Validation & Dry-Run (pwsh)"
+ONBOARDING_TEST_OK=1
+
+if command -v pwsh >/dev/null 2>&1; then
+    FRESH_INSTALL_PS1="$ROOT_DIR/windows/fresh-install.ps1"
+
+    # 1. Help flag invocation
+    if pwsh -NoProfile -Command "& '$FRESH_INSTALL_PS1' -?" >/dev/null 2>&1; then
+        echo "  [OK] fresh-install.ps1 -? executed cleanly under pwsh."
+    else
+        ONBOARDING_TEST_OK=0
+        echo "  [-] fresh-install.ps1 -? failed under pwsh." >&2
+    fi
+
+    # 2. Reject identical IPs
+    IDENTICAL_OUTPUT=$(pwsh -NoProfile -Command "& '$FRESH_INSTALL_PS1' -NonInteractive -VM1_IP 127.0.0.1 -VM2_IP 127.0.0.1" 2>&1 || true)
+    if echo "$IDENTICAL_OUTPUT" | grep -q "cannot be identical"; then
+        echo "  [OK] fresh-install.ps1 rejected identical VM1 and VM2 IP addresses."
+    else
+        ONBOARDING_TEST_OK=0
+        echo "  [-] fresh-install.ps1 failed to reject identical IP addresses: $IDENTICAL_OUTPUT" >&2
+    fi
+
+    # 3. Reject invalid IP format
+    INVALID_IP_OUTPUT=$(pwsh -NoProfile -Command "& '$FRESH_INSTALL_PS1' -NonInteractive -VM1_IP notanip -VM2_IP 127.0.0.2" 2>&1 || true)
+    if echo "$INVALID_IP_OUTPUT" | grep -q "is not a valid IPv4 address"; then
+        echo "  [OK] fresh-install.ps1 rejected invalid IPv4 address format."
+    else
+        ONBOARDING_TEST_OK=0
+        echo "  [-] fresh-install.ps1 failed to reject invalid IPv4 address format: $INVALID_IP_OUTPUT" >&2
+    fi
+
+    # 4. Safe dry-run execution targeting loopback addresses
+    TEST_REPORT_DIR=""
+    create_safe_tmp_dir TEST_REPORT_DIR "/tmp/pipejack-onboard-report-XXXXXX" || { echo "[-] Failed to create safe report dir" >&2; exit 1; }
+    register_test_path "$TEST_REPORT_DIR"
+
+    DRY_RUN_OUTPUT=$(pwsh -NoProfile -Command "& '$FRESH_INSTALL_PS1' -DryRun -NonInteractive -VM1_IP 127.0.0.1 -VM2_IP 127.0.0.2 -SSHPort 2222 -ReportDir '$TEST_REPORT_DIR'" 2>&1 || true)
+    if echo "$DRY_RUN_OUTPUT" | grep -q "DRY-RUN-COMPLETE"; then
+        echo "  [OK] fresh-install.ps1 completed dry-run workflow targeting loopback addresses."
+    else
+        ONBOARDING_TEST_OK=0
+        echo "  [-] fresh-install.ps1 dry-run execution failed: $DRY_RUN_OUTPUT" >&2
+    fi
+
+    safe_delete_path "$TEST_REPORT_DIR"
+
+    if [ $ONBOARDING_TEST_OK -eq 1 ]; then
+        pass "Fresh two-VM onboarding installer verified for argument validation, rejection invariants, and dry-run workflow"
+    else
+        fail "Fresh two-VM onboarding installer verification failed"
+    fi
+else
+    pass "pwsh not available; basic syntax verified via static AST parsing in Test 4"
+fi
+
+# -----------------------------------------------------------------------------
+# Test 15: Final Host /tmp Namespace Preservation Verification
 # -----------------------------------------------------------------------------
 section "Final Host /tmp Namespace Preservation Verification"
 FINAL_CANARY_OK=1

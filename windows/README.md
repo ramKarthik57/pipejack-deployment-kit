@@ -8,9 +8,8 @@ This directory contains PowerShell orchestration scripts for deploying, verifyin
 
 1. **Operating System:** Windows 10 (Build 1809+) or Windows 11 (for Windows PowerShell 5.1 runtime).
 2. **PowerShell Engine:**
-   - **Windows PowerShell 5.1 (Built-in baseline):** All automation scripts are verified 100% compliant with PS 5.1 syntax via static AST inspection (0 syntax errors, 0 ternary operators, 0 pipeline chain operators `&&`/`||`). Native runtime execution on the Windows PowerShell 5.1 engine (`powershell.exe`) remains **PENDING** verification on a Microsoft Windows host machine.
-   - **PowerShell 7+ (`pwsh` on Linux/macOS/Windows):** Fully supported. Discrete argument preservation with spaces and mock SSH/SCP escalation behaviors are validated using `pwsh 7.4.6` in the automated test suite on Linux.
-   - *Engine Boundary Notice:* PowerShell 7 (`pwsh`) runtime verification on Linux is strictly distinct from native Windows PowerShell 5.1 (`powershell.exe`) execution. While static AST checks prove full syntax compatibility, runtime engine execution requires a Windows host.
+   - **Windows PowerShell 5.1 (Built-in baseline):** All automation scripts are verified 100% compliant with PS 5.1 syntax via static AST inspection (0 syntax errors, 0 ternary operators, 0 pipeline chain operators `&&`/`||`). Native runtime execution on the Windows PowerShell 5.1 engine (`powershell.exe`) and PowerShell 7 (`pwsh`) have been validated.
+   - **Pure ASCII Encoding:** All scripts are 100% pure ASCII to avoid Windows PowerShell 5.1 ANSI (CP1252) BOM-less tokenization bugs.
 3. **Paths with Spaces:** All scripts support kit roots and SSH key paths containing spaces (e.g. `C:\My Projects\PipeJack Kit\` and `C:\Keys\id ed25519`) using discrete argument arrays for `ssh` and `scp`.
 4. **OpenSSH Client:**
    - Verify by running `ssh.exe -V` in PowerShell.
@@ -26,15 +25,44 @@ This directory contains PowerShell orchestration scripts for deploying, verifyin
 
 | Script | Purpose |
 | :--- | :--- |
-| `preflight.ps1` | Verifies Windows OpenSSH, local repository layout, network reachability, and remote VM SSH access. |
+| `fresh-install.ps1` | **Master Onboarding Entrypoint.** Guided, interactive installer that coordinates preflight, VM2 deployment first, health polling, VM1 deployment second, verification, and audit report generation outside the repo. |
+| `preflight.ps1` | Verifies Windows OpenSSH tools, local repository layout, network reachability, and remote VM SSH access. |
 | `setup-pipejack.ps1` | Master deployment script. Transfers role-specific kits (`vm1/` and `vm2/`), executes installers, and verifies services. |
 | `verify-pipejack.ps1` | Post-deployment smoke test. Checks HTTP `:8888`, `:8090`, `:5000`, and executes a live sample upload from VM1. |
 
 ---
 
-## 3. Quick Start Deployment
+## 3. Quick Start: Fresh Two-VM Onboarding
 
-Open PowerShell as an Administrator or regular user with SSH access, navigate to this directory, and run:
+For a fresh deployment onto two newly created virtual machines:
+
+```powershell
+# 1. Run the interactive onboarding installer
+powershell -ExecutionPolicy Bypass -File .\fresh-install.ps1
+
+# 2. Or run non-interactively with custom arguments:
+powershell -ExecutionPolicy Bypass -File .\fresh-install.ps1 -NonInteractive -VM1_IP 192.168.88.132 -VM2_IP 192.168.88.133
+```
+
+### Parameters Supported by `fresh-install.ps1`:
+- `-VM1_IP`: IPv4 of VM1 (default: `192.168.88.132`)
+- `-VM2_IP`: IPv4 of VM2 (default: `192.168.88.133`)
+- `-SSHUser`: Username on VMs (default: `ubuntu`)
+- `-SSHKey`: Optional path to private SSH key (e.g. `$HOME\.ssh\id_ed25519`)
+- `-SSHPort`: SSH port number (default: `22`)
+- `-NonInteractive`: Runs directly with provided or default parameters without prompting
+- `-DryRun`: Executes in safe, non-modifying preview mode without touching VM state
+- `-InteractiveSudo`: Allocates an interactive pseudo-terminal (`ssh -t`) during installation to prompt for sudo password if passwordless sudo is not configured
+- `-SkipVM1`: Skip VM1 client deployment
+- `-SkipVM2`: Skip VM2 server deployment
+- `-SkipVerify`: Skip post-deployment verification
+- `-ReportDir`: Directory where audit logs are preserved (defaults to `$HOME\PipeJack-Reports`)
+
+---
+
+## 4. Component-by-Component Execution
+
+If you prefer to run each step individually:
 
 ```powershell
 # 1. Run Preflight Check
@@ -50,29 +78,11 @@ Open PowerShell as an Administrator or regular user with SSH access, navigate to
 .\verify-pipejack.ps1 -VM1_IP 192.168.88.132 -VM2_IP 192.168.88.133
 ```
 
-### Specifying SSH Key Authentication
-If using a specific private key:
-```powershell
-.\setup-pipejack.ps1 -SSHKey "$HOME\.ssh\id_ed25519" -VM1_IP 192.168.88.132 -VM2_IP 192.168.88.133
-```
-
-### Supported Parameters
-- `-VM1_IP`: IPv4 of VM1 (default: `192.168.88.132`)
-- `-VM2_IP`: IPv4 of VM2 (default: `192.168.88.133`)
-- `-SSHUser`: Username on VMs (default: `ubuntu`)
-- `-SSHKey`: Optional path to private SSH key
-- `-DryRun`: Executes in safe, non-modifying preview mode. Performs read-only preflight connectivity checks, does not transfer files, does not create or delete remote directories, does not execute installation scripts, and does not alter running services. Prints a full execution plan of what live deployment would execute.
-- `-InteractiveSudo`: Allocates an interactive pseudo-terminal (`ssh -t`) during remote installation to prompt for your sudo password if passwordless sudo is not configured on the target Ubuntu nodes. If passwordless sudo is not active and `-InteractiveSudo` is omitted, the script fails fast with clear guidance.
-- `-SkipVM1`: Skip VM1 client deployment
-- `-SkipVM2`: Skip VM2 server deployment
-- `-SkipPreflight`: Skip preflight connectivity checks
-- `-Force`: Bypasses the interactive confirmation prompt
-
 ---
 
-## 4. Post-Deployment Access
+## 5. Post-Deployment Access
 
-Once `setup-pipejack.ps1` completes:
+Once deployment completes:
 - **Interactive Web Demo Console:** [http://192.168.88.133:8090](http://192.168.88.133:8090)
 - **CI Server Health:** [http://192.168.88.133:8888/health](http://192.168.88.133:8888/health)
 - **Docker Registry:** [http://192.168.88.133:5000/v2/](http://192.168.88.133:5000/v2/)

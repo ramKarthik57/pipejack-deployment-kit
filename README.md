@@ -112,11 +112,13 @@ pipejack-deployment-kit/
 │   ├── scripts/              # deploy-ci.sh, health-check.sh, prepare-demo.sh
 │   └── config/               # vm2.env.example, ci.env.example
 ├── windows/                  # Windows Host PowerShell Automation
+│   ├── fresh-install.ps1     # Master guided two-VM onboarding installer
 │   ├── setup-pipejack.ps1    # Master deployment orchestrator
 │   ├── preflight.ps1         # Connectivity & prerequisite validator
 │   ├── verify-pipejack.ps1   # Post-deployment end-to-end smoke test
 │   └── README.md
-├── shared/                   # Shared Templates
+├── shared/                   # Shared Assets & Network Bootstrapper
+│   ├── bootstrap-network.sh  # Automated guest network config & conflict detector
 │   ├── README.md
 │   └── templates/            # Netplan YAMLs & hosts configuration
 ├── tests/                    # Automated Test Suites
@@ -135,7 +137,27 @@ pipejack-deployment-kit/
 
 ## 5. Installation Workflows
 
-### Method A: Automated Deployment from Windows (Recommended)
+### Method 0: Fresh Two-VM Guided Onboarding (Recommended for New Laptops)
+
+If you are setting up PipeJack on a new laptop with two newly created Ubuntu 24.04 or 22.04 VMs, use the automated guided onboarding installer. It validates host OpenSSH, assists with SSH public keys, deploys VM2 first, waits for health, deploys VM1 second, verifies the cluster, and saves an audit log outside the repository:
+
+```powershell
+# 1. Open PowerShell and navigate to the deployment kit
+cd pipejack-deployment-kit\windows
+
+# 2. Run the guided master onboarding installer (prompts with safe defaults)
+powershell -ExecutionPolicy Bypass -File .\fresh-install.ps1
+
+# Or non-interactive / automated:
+powershell -ExecutionPolicy Bypass -File .\fresh-install.ps1 -NonInteractive -VM1_IP 192.168.88.132 -VM2_IP 192.168.88.133
+```
+
+> [!NOTE]
+> For complete VMware virtual machine setup steps, static networking configuration, and the 10-point Acceptance Checklist, consult the comprehensive [Fresh Installation Guide](docs/FRESH_INSTALL.md).
+
+---
+
+### Method A: Component-by-Component Automated Deployment from Windows
 
 From your Windows workstation with VMware running both booted VMs:
 

@@ -120,8 +120,11 @@ function Test-RemoteHost {
         "-o", "StrictHostKeyChecking=accept-new"
     ) + $SSHKeyArgs + @($Target, $Cmd)
 
+    $oldPref = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
     $output = & $SSH_CMD @CommonArgs 2>&1
     $exitCode = $LASTEXITCODE
+    $ErrorActionPreference = $oldPref
 
     if ($exitCode -eq 0) {
         Write-Host "  [OK] SSH authentication succeeded for $Target" -ForegroundColor Green
