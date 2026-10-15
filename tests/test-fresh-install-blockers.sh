@@ -3088,9 +3088,9 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# Test 13: Guest Network Bootstrapper CLI & Interface Discovery (Isolated Tests)
+# Test 13: Guest Network Bootstrapper CLI, Discovery & Rollback Invariants (Isolated Tests)
 # -----------------------------------------------------------------------------
-section "Guest Network Bootstrapper CLI & Interface Discovery (Isolated Tests)"
+section "Guest Network Bootstrapper CLI, Discovery & Rollback Invariants (Isolated Tests)"
 BOOTSTRAP_SCRIPT="$ROOT_DIR/shared/bootstrap-network.sh"
 BOOTSTRAP_TEST_OK=1
 
@@ -3136,16 +3136,162 @@ else
     echo "  [-] bootstrap-network.sh --role vm1 --dry-run failed to produce expected preview: $VM1_PREVIEW" >&2
 fi
 
+# 6. Ambiguous interface discovery fails safely
+MOCK_SYSFS_DIR=""
+create_safe_tmp_dir MOCK_SYSFS_DIR "/tmp/pipejack-mock-sysfs-XXXXXX" || { echo "[-] Failed to create mock sysfs dir" >&2; exit 1; }
+register_test_path "$MOCK_SYSFS_DIR"
+mkdir -p "$MOCK_SYSFS_DIR/ens33" "$MOCK_SYSFS_DIR/ens34" "$MOCK_SYSFS_DIR/ens35"
+
+AMBIG_OUT=$(PIPEJACK_SYS_CLASS_NET="$MOCK_SYSFS_DIR" "$BOOTSTRAP_SCRIPT" --role vm1 --dry-run 2>&1 || true)
+if echo "$AMBIG_OUT" | grep -q -i "Ambiguous" && echo "$AMBIG_OUT" | grep -q -- "--nat-iface"; then
+    echo "  [OK] bootstrap-network.sh safely failed on ambiguous interface configuration."
+else
+    BOOTSTRAP_TEST_OK=0
+    echo "  [-] bootstrap-network.sh failed to reject ambiguous interface configuration: $AMBIG_OUT" >&2
+fi
+safe_delete_path "$MOCK_SYSFS_DIR"
+
+# 7. Rollback on Netplan failure restores original files without leaving .disabled files
+MOCK_SYSFS_7=""
+create_safe_tmp_dir MOCK_SYSFS_7 "/tmp/pipejack-mock-sysfs-XXXXXX" || { echo "[-] Failed to create mock sysfs dir" >&2; exit 1; }
+register_test_path "$MOCK_SYSFS_7"
+mkdir -p "$MOCK_SYSFS_7/ens33" "$MOCK_SYSFS_7/ens34"
+
+MOCK_NETPLAN_DIR=""
+create_safe_tmp_dir MOCK_NETPLAN_DIR "/tmp/pipejack-mock-netplan-XXXXXX" || { echo "[-] Failed to create mock netplan dir" >&2; exit 1; }
+register_test_path "$MOCK_NETPLAN_DIR"
+
+MOCK_NETPLAN_BIN=""
+create_safe_tmp_dir MOCK_NETPLAN_BIN "/tmp/pipejack-mock-bin-XXXXXX" || { echo "[-] Failed to create mock bin dir" >&2; exit 1; }
+register_test_path "$MOCK_NETPLAN_BIN"
+
+cat << 'EOF' > "$MOCK_NETPLAN_BIN/netplan"
+#!/usr/bin/env bash
+echo "mock netplan generate failure" >&2
+exit 1
+EOF
+chmod +x "$MOCK_NETPLAN_BIN/netplan"
+
+ORIG_CONF="$MOCK_NETPLAN_DIR/00-installer-config.yaml"
+ORIG_CONTENT="network: {version: 2, ethernets: {ens33: {dhcp4: true}}}"
+printf "%s\n" "$ORIG_CONTENT" > "$ORIG_CONF"
+chmod 0600 "$ORIG_CONF"
+
+ROLLBACK_OUT=$(PATH="$MOCK_NETPLAN_BIN:$PATH" PIPEJACK_SYS_CLASS_NET="$MOCK_SYSFS_7" PIPEJACK_NETPLAN_DIR="$MOCK_NETPLAN_DIR" "$BOOTSTRAP_SCRIPT" --role vm1 --force --nat-iface ens33 --private-iface ens34 2>&1 || true)
+
+DISABLED_COUNT=$(find "$MOCK_NETPLAN_DIR" -name "*.disabled" 2>/dev/null | wc -l)
+if echo "$ROLLBACK_OUT" | grep -q "Network rollback completed" && \
+   [ -f "$ORIG_CONF" ] && \
+   [ "$(cat "$ORIG_CONF")" = "$ORIG_CONTENT" ] && \
+   [ "$DISABLED_COUNT" -eq 0 ] && \
+   [ ! -f "$MOCK_NETPLAN_DIR/01-pipejack-netcfg.yaml" ]; then
+    echo "  [OK] bootstrap-network.sh performed clean rollback on netplan failure without leaving disabled files."
+else
+    BOOTSTRAP_TEST_OK=0
+    echo "  [-] bootstrap-network.sh rollback failed or left dirty state (disabled files: $DISABLED_COUNT): $ROLLBACK_OUT" >&2
+fi
+safe_delete_path "$MOCK_NETPLAN_BIN"
+safe_delete_path "$MOCK_NETPLAN_DIR"
+safe_delete_path "$MOCK_SYSFS_7"
+
+# 8. Repeated bootstrap attempt is idempotent
+MOCK_SYSFS_8=""
+create_safe_tmp_dir MOCK_SYSFS_8 "/tmp/pipejack-mock-sysfs-XXXXXX" || { echo "[-] Failed to create mock sysfs dir" >&2; exit 1; }
+register_test_path "$MOCK_SYSFS_8"
+mkdir -p "$MOCK_SYSFS_8/ens33" "$MOCK_SYSFS_8/ens34"
+
+MOCK_IDEMP_DIR=""
+create_safe_tmp_dir MOCK_IDEMP_DIR "/tmp/pipejack-mock-idemp-XXXXXX" || { echo "[-] Failed to create mock idemp dir" >&2; exit 1; }
+register_test_path "$MOCK_IDEMP_DIR"
+
+MOCK_IDEMP_BIN=""
+create_safe_tmp_dir MOCK_IDEMP_BIN "/tmp/pipejack-mock-ibin-XXXXXX" || { echo "[-] Failed to create mock ibin dir" >&2; exit 1; }
+register_test_path "$MOCK_IDEMP_BIN"
+
+cat << 'EOF' > "$MOCK_IDEMP_BIN/netplan"
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$MOCK_IDEMP_BIN/netplan"
+
+PATH="$MOCK_IDEMP_BIN:$PATH" PIPEJACK_SYS_CLASS_NET="$MOCK_SYSFS_8" PIPEJACK_NETPLAN_DIR="$MOCK_IDEMP_DIR" "$BOOTSTRAP_SCRIPT" --role vm1 --force --nat-iface ens33 --private-iface ens34 >/dev/null 2>&1
+IDEMP_OUT2=$(PATH="$MOCK_IDEMP_BIN:$PATH" PIPEJACK_SYS_CLASS_NET="$MOCK_SYSFS_8" PIPEJACK_NETPLAN_DIR="$MOCK_IDEMP_DIR" "$BOOTSTRAP_SCRIPT" --role vm1 --force --nat-iface ens33 --private-iface ens34 2>&1 || true)
+
+IDEMP_DISABLED=$(find "$MOCK_IDEMP_DIR" -name "*.disabled" 2>/dev/null | wc -l)
+if [ -f "$MOCK_IDEMP_DIR/01-pipejack-netcfg.yaml" ] && [ "$IDEMP_DISABLED" -eq 0 ]; then
+    echo "  [OK] Repeated bootstrap execution is idempotent and leaves no orphaned .disabled files."
+else
+    BOOTSTRAP_TEST_OK=0
+    echo "  [-] Repeated bootstrap execution failed or left orphaned files: $IDEMP_OUT2" >&2
+fi
+safe_delete_path "$MOCK_IDEMP_BIN"
+safe_delete_path "$MOCK_IDEMP_DIR"
+safe_delete_path "$MOCK_SYSFS_8"
+
 if [ $BOOTSTRAP_TEST_OK -eq 1 ]; then
-    pass "Guest network bootstrapper passed isolated argument, validation, and dry-run preview tests"
+    pass "Guest network bootstrapper passed isolated argument, ambiguity discovery rejection, rollback integrity, and idempotency tests"
 else
     fail "Guest network bootstrapper failed isolated tests"
 fi
 
 # -----------------------------------------------------------------------------
-# Test 14: Fresh Two-VM Onboarding Installer Parameter Validation & Dry-Run (pwsh)
+# Test 14: Fresh-Laptop Repository Documentation & Guest Retrieval Contract
 # -----------------------------------------------------------------------------
-section "Fresh Two-VM Onboarding Installer Parameter Validation & Dry-Run (pwsh)"
+section "Fresh-Laptop Repository Documentation & Guest Retrieval Contract"
+DOCS_CONTRACT_OK=1
+
+EXPECTED_CLONE_CMD="git clone --branch feat/fresh-two-vm-onboarding --single-branch https://github.com/ramKarthik57/pipejack-deployment-kit.git"
+DOC_FILES=("$ROOT_DIR/README.md" "$ROOT_DIR/docs/FRESH_INSTALL.md" "$ROOT_DIR/windows/README.md")
+
+for doc in "${DOC_FILES[@]}"; do
+    if grep -F -q "$EXPECTED_CLONE_CMD" "$doc"; then
+        echo "  [OK] Found exact branch clone command in $(basename "$doc")."
+    else
+        DOCS_CONTRACT_OK=0
+        echo "  [-] Missing exact branch clone command in $(basename "$doc")." >&2
+    fi
+done
+
+# Verify guest curl command contract
+EXPECTED_CURL_URL="https://raw.githubusercontent.com/ramKarthik57/pipejack-deployment-kit/feat/fresh-two-vm-onboarding/shared/bootstrap-network.sh"
+GUEST_DOC_FILES=("$ROOT_DIR/README.md" "$ROOT_DIR/docs/FRESH_INSTALL.md" "$ROOT_DIR/docs/NETWORKING.md")
+
+for doc in "${GUEST_DOC_FILES[@]}"; do
+    if grep -F -q "$EXPECTED_CURL_URL" "$doc"; then
+        echo "  [OK] Found copyable raw GitHub bootstrap URL in $(basename "$doc")."
+    else
+        DOCS_CONTRACT_OK=0
+        echo "  [-] Missing copyable raw GitHub bootstrap URL in $(basename "$doc")." >&2
+    fi
+done
+
+# Verify distinct role commands documented
+if grep -q "bootstrap-network.sh --role vm1" "$ROOT_DIR/docs/FRESH_INSTALL.md" && \
+   grep -q "bootstrap-network.sh --role vm2" "$ROOT_DIR/docs/FRESH_INSTALL.md"; then
+    echo "  [OK] Distinct VM1 and VM2 bootstrap commands documented in FRESH_INSTALL.md."
+else
+    DOCS_CONTRACT_OK=0
+    echo "  [-] Missing distinct VM1/VM2 bootstrap commands in FRESH_INSTALL.md." >&2
+fi
+
+# Verify bootstrap script existence and executable bit
+if [ -x "$ROOT_DIR/shared/bootstrap-network.sh" ]; then
+    echo "  [OK] shared/bootstrap-network.sh exists and is executable."
+else
+    DOCS_CONTRACT_OK=0
+    echo "  [-] shared/bootstrap-network.sh is missing or not executable." >&2
+fi
+
+if [ $DOCS_CONTRACT_OK -eq 1 ]; then
+    pass "Fresh-laptop documentation accurately specifies branch clone, guest curl commands, and distinct VM roles"
+else
+    fail "Fresh-laptop documentation contract verification failed"
+fi
+
+# -----------------------------------------------------------------------------
+# Test 15: Fresh Two-VM Onboarding Installer, Health Gate & Summary Accuracy (pwsh)
+# -----------------------------------------------------------------------------
+section "Fresh Two-VM Onboarding Installer, Health Gate & Summary Accuracy (pwsh)"
 ONBOARDING_TEST_OK=1
 
 if command -v pwsh >/dev/null 2>&1; then
@@ -3190,10 +3336,83 @@ if command -v pwsh >/dev/null 2>&1; then
         echo "  [-] fresh-install.ps1 dry-run execution failed: $DRY_RUN_OUTPUT" >&2
     fi
 
+    # Setup mock SSH/SCP environment for health gate tests
+    MOCK_PWSH_DIR=""
+    create_safe_tmp_dir MOCK_PWSH_DIR "/tmp/pipejack-mock-pwsh-XXXXXX" || { echo "[-] Failed to create mock pwsh dir" >&2; exit 1; }
+    register_test_path "$MOCK_PWSH_DIR"
+
+    cat << 'EOF' > "$MOCK_PWSH_DIR/ssh"
+#!/usr/bin/env bash
+exit 0
+EOF
+    chmod +x "$MOCK_PWSH_DIR/ssh"
+    ln -sf "$MOCK_PWSH_DIR/ssh" "$MOCK_PWSH_DIR/ssh.exe"
+
+    cat << 'EOF' > "$MOCK_PWSH_DIR/scp"
+#!/usr/bin/env bash
+exit 0
+EOF
+    chmod +x "$MOCK_PWSH_DIR/scp"
+    ln -sf "$MOCK_PWSH_DIR/scp" "$MOCK_PWSH_DIR/scp.exe"
+
+    # 5. Mock unhealthy VM2: hard health gate blocks VM1 and reports FAIL
+    GATE_FAIL_DIR=""
+    create_safe_tmp_dir GATE_FAIL_DIR "/tmp/pipejack-gate-fail-XXXXXX" || { echo "[-] Failed to create gate fail dir" >&2; exit 1; }
+    register_test_path "$GATE_FAIL_DIR"
+
+    gate_fail_ec=0
+    GATE_FAIL_OUT=$(PATH="$MOCK_PWSH_DIR:$PATH" PIPEJACK_MOCK_HEALTH="fail" pwsh -NoProfile -Command "
+        & '$FRESH_INSTALL_PS1' -NonInteractive -SkipPreflight -VM1_IP 127.0.0.1 -VM2_IP 127.0.0.2 -SSHPort 2222 -ReportDir '$GATE_FAIL_DIR'
+    " 2>&1) || gate_fail_ec=$?
+
+    # Find the summary report in GATE_FAIL_DIR
+    GATE_FAIL_SUMMARY=$(find "$GATE_FAIL_DIR" -name "*-summary.txt" 2>/dev/null | head -1)
+
+    if [ $gate_fail_ec -eq 1 ] && \
+       echo "$GATE_FAIL_OUT" | grep -q "HARD DEPLOYMENT GATE FAILED" && \
+       echo "$GATE_FAIL_OUT" | grep -q "Deploying VM1 is BLOCKED" && \
+       [ -n "$GATE_FAIL_SUMMARY" ] && \
+       grep -q "VM1 Client Deployment:     NOT EXECUTED" "$GATE_FAIL_SUMMARY" && \
+       grep -q "End-to-End Verification:   NOT EXECUTED" "$GATE_FAIL_SUMMARY" && \
+       grep -q "Overall Deployment Verdict:     FAIL" "$GATE_FAIL_SUMMARY"; then
+        echo "  [OK] Mock unhealthy VM2 correctly triggered hard health gate, blocked VM1 deployment, and produced accurate FAIL/NOT EXECUTED summary."
+    else
+        ONBOARDING_TEST_OK=0
+        echo "  [-] Mock unhealthy VM2 failed to enforce hard health gate (ec: $gate_fail_ec): $GATE_FAIL_OUT" >&2
+    fi
+
+    # 6. Mock healthy VM2: permits VM1 deployment and marks phases PASS
+    GATE_PASS_DIR=""
+    create_safe_tmp_dir GATE_PASS_DIR "/tmp/pipejack-gate-pass-XXXXXX" || { echo "[-] Failed to create gate pass dir" >&2; exit 1; }
+    register_test_path "$GATE_PASS_DIR"
+
+    gate_pass_ec=0
+    GATE_PASS_OUT=$(PATH="$MOCK_PWSH_DIR:$PATH" PIPEJACK_MOCK_HEALTH="pass" pwsh -NoProfile -Command "
+        & '$FRESH_INSTALL_PS1' -NonInteractive -SkipPreflight -SkipVerify -VM1_IP 127.0.0.1 -VM2_IP 127.0.0.2 -SSHPort 2222 -ReportDir '$GATE_PASS_DIR'
+    " 2>&1) || gate_pass_ec=$?
+
+    GATE_PASS_SUMMARY=$(find "$GATE_PASS_DIR" -name "*-summary.txt" 2>/dev/null | head -1)
+
+    if [ $gate_pass_ec -eq 0 ] && \
+       echo "$GATE_PASS_OUT" | grep -q "All VM2 core services confirmed healthy" && \
+       echo "$GATE_PASS_OUT" | grep -q "Step 4/5: Deploying VM1 Workload Client" && \
+       [ -n "$GATE_PASS_SUMMARY" ] && \
+       grep -q "CI Orchestrator (:8888): PASS" "$GATE_PASS_SUMMARY" && \
+       grep -q "VM1 Client Deployment:     PASS" "$GATE_PASS_SUMMARY" && \
+       grep -q "Overall Deployment Verdict:     PASS" "$GATE_PASS_SUMMARY"; then
+        echo "  [OK] Mock healthy VM2 permitted VM1 deployment and produced accurate PASS summary."
+    else
+        ONBOARDING_TEST_OK=0
+        echo "  [-] Mock healthy VM2 failed deployment flow (ec: $gate_pass_ec): $GATE_PASS_OUT" >&2
+    fi
+
+    safe_delete_path "$GATE_FAIL_DIR"
+    safe_delete_path "$GATE_PASS_DIR"
+    safe_delete_path "$MOCK_PWSH_DIR"
     safe_delete_path "$TEST_REPORT_DIR"
 
     if [ $ONBOARDING_TEST_OK -eq 1 ]; then
-        pass "Fresh two-VM onboarding installer verified for argument validation, rejection invariants, and dry-run workflow"
+        pass "Fresh two-VM onboarding installer verified for argument validation, hard health gate failure blocking, healthy flow, and summary accuracy"
     else
         fail "Fresh two-VM onboarding installer verification failed"
     fi

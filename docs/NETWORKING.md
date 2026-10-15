@@ -47,25 +47,39 @@ PipeJack is designed with a dual-network interface architecture separating admin
 
 ## 3. Automated Guest Network Bootstrapper (`bootstrap-network.sh`)
 
-To eliminate manual configuration errors and interface name guessing on fresh VMs, the kit includes `shared/bootstrap-network.sh`:
+To eliminate manual configuration errors and interface name guessing on fresh VMs, use `shared/bootstrap-network.sh`.
 
+### Downloading on Fresh Ubuntu Guests
+
+Before the repository is cloned onto the guests, obtain the script directly from the onboarding branch using `curl`:
+
+**On VM2 (Server Orchestrator - `192.168.88.133`):**
 ```bash
-# On VM2 (Server Orchestrator):
-sudo bash shared/bootstrap-network.sh --role vm2
-
-# On VM1 (Workload Client):
-sudo bash shared/bootstrap-network.sh --role vm1
+curl -fsSL https://raw.githubusercontent.com/ramKarthik57/pipejack-deployment-kit/feat/fresh-two-vm-onboarding/shared/bootstrap-network.sh -o bootstrap-network.sh
+chmod +x bootstrap-network.sh
+sudo ./bootstrap-network.sh --role vm2
 ```
 
-### Key Capabilities:
-1. **Dynamic Interface Auto-Discovery:**
+**On VM1 (Workload Client - `192.168.88.132`):**
+```bash
+curl -fsSL https://raw.githubusercontent.com/ramKarthik57/pipejack-deployment-kit/feat/fresh-two-vm-onboarding/shared/bootstrap-network.sh -o bootstrap-network.sh
+chmod +x bootstrap-network.sh
+sudo ./bootstrap-network.sh --role vm1
+```
+
+*(If the repository is already cloned locally on the guest, you can run `sudo bash shared/bootstrap-network.sh --role <vm1|vm2>` directly.)*
+
+### Key Capabilities & Safety Guarantees:
+1. **Dynamic Interface Auto-Discovery & Ambiguity Rejection:**
    Scans `/sys/class/net/*` (ignoring loopback, docker, and virtual bridges) to automatically identify which interface has the default route (NAT) and which adapter is connected to the Host-Only network.
+   - **Ambiguity Guard:** If multiple non-NAT candidate interfaces exist, or if no interface holds a default IPv4 route, the script refuses to guess and aborts with exit code 1 unless explicit `--nat-iface <dev>` and `--private-iface <dev>` flags are provided.
 2. **Subnet Conflict Detection:**
    Validates that the NAT interface is not mistakenly placed on `192.168.88.0/24`. If a conflict is detected, it aborts cleanly with remediation guidance before altering network settings.
-3. **Automated Configuration Backup:**
-   Backs up all existing `/etc/netplan/*.yaml` files to `/etc/netplan/pipejack-backup-<timestamp>/` and renames old configs with `.disabled` to prevent conflicting static routes.
-4. **Syntax Validation & Safe Rollback:**
-   Generates `/etc/netplan/01-pipejack-netcfg.yaml`, tests it using `netplan generate`, and only executes `netplan apply` if syntax verification passes. If `netplan generate` fails, it restores the backup automatically.
+3. **Automated Configuration Backup & Clean Rollback:**
+   Backs up all existing `/etc/netplan/*.yaml` files to `/etc/netplan/pipejack-backup-<timestamp>/` preserving original file permissions and contents.
+   - If syntax verification fails, `netplan apply` fails, or `netplan try` is rejected or times out, the script triggers an atomic rollback that restores all original files and removes temporary/disabled files without leaving `.disabled` artifacts behind.
+4. **Syntax Validation & Safe Application:**
+   Generates `/etc/netplan/01-pipejack-netcfg.yaml` and verifies it using `netplan generate`. In interactive sessions, it tests connectivity using `netplan try --timeout 30`. In non-interactive (`--force`) sessions, it applies after validation.
 5. **Dry-Run Preview:**
    Allows previewing generated Netplan YAML without modifying host state via `--dry-run`.
 

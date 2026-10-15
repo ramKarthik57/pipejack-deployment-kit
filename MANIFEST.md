@@ -8,7 +8,7 @@
 | :--- | :--- | :--- | :--- | :--- |
 | `.gitignore` | 757 | `0644` | Root / Shared | `7c8c191c3cc0c56e2e71c24546f9596a86a3ed490bf1ccd4582bcc364d0762fd` |
 | `LICENSE` | 2569 | `0644` | Root / Shared | `5f742747cd1c7a00348c5d6535f157c2bf793ee19ba06d7e248e4f62f906f178` |
-| `README.md` | 19149 | `0664` | Root / Shared | `e7b96ddef12872597607c8e1a93a3e121ec32e7913051c561b617f55d5a8c945` |
+| `README.md` | 20708 | `0664` | Root / Shared | `9af9ef9295097c83dd816e1c0bbb769ebb2e9f12055f2f3267693a17a0a5c541` |
 | `SECURITY.md` | 4673 | `0664` | Root / Shared | `709ef0b82f16e193da94e16a8f2386bd8ba12bcb016f24b6b77ea09b0ccd6229` |
 | `SOURCE_MAPPING.md` | 11484 | `0644` | Root / Shared | `3e705627633a9fc5da981fa6651aabe7b104f85c8754fd0197d429b213941b68` |
 | `UPSTREAM_BASELINE.md` | 4503 | `0644` | Root / Shared | `99ab541a9232f65d4553c294f30e26db3fba64c8487ab65aa9ab2cfa1c993add` |
@@ -16,17 +16,17 @@
 | `config/README.md` | 397 | `0644` | Configuration | `7aeaa7628a5f68655fb0790ea0dca33068e15b743939ed9b0ba62b91e90192ff` |
 | `config/defaults.env.example` | 996 | `0644` | Configuration | `31f762a7116dae8358be800d23edbb207881c8586ac044359b0ccab6d1ff9d18` |
 | `docs/ARCHITECTURE.md` | 8608 | `0664` | Documentation | `680db0700e1290f3af5653db22a7a8fdee5eaf8026f1c644f116581d41468a22` |
-| `docs/FRESH_INSTALL.md` | 15098 | `0664` | Documentation | `ea3943ede577b1649e43a98a66836a9c60090644d3fb639d1e42a1052e05790e` |
-| `docs/NETWORKING.md` | 5634 | `0644` | Documentation | `139f0c714b3fc6cd1e233f2e428e10e53a1f6da770d3b92d4e7dce0c366f2ad4` |
+| `docs/FRESH_INSTALL.md` | 16562 | `0664` | Documentation | `18667a62abfde591e45dd940926d5d2789ce5e9a9fa6208f902997c6f017a5c2` |
+| `docs/NETWORKING.md` | 6917 | `0644` | Documentation | `814910c16400ec73299461d030146789f91fa35cbfd073fff8ceda5b3e329c10` |
 | `docs/RECOVERY.md` | 3140 | `0644` | Documentation | `fc4aca31bf7b1124afb8d0482fc4006cc372093bada9d9a3baf735a421ca2246` |
-| `docs/TROUBLESHOOTING.md` | 6389 | `0644` | Documentation | `a5b613239125d92df70cbd132766a07b4723ce8c5b83a0ca787cff8e0ea5443c` |
-| `shared/bootstrap-network.sh` | 11867 | `0755` | Root / Shared | `9f5e3df8755bce2fd725c63482afe9a7e15d2aeb6609f69c8b682272bfaab8b4` |
+| `docs/TROUBLESHOOTING.md` | 7559 | `0644` | Documentation | `3e169ed427e7f41085c3074d526a06c310fc622a90fbb391c1095140cf99bc6b` |
+| `shared/bootstrap-network.sh` | 16333 | `0755` | Root / Shared | `4a754777d18ba53e9e59a1f875d8d8084fbd1e2357a9e8780dda0b9af6805669` |
 | `shared/README.md` | 878 | `0644` | Root / Shared | `2896977f09d081b83502fe653c075402c3a67cf2149c5ea0664ac175ca916ccd` |
 | `shared/templates/01-netplan-vm1.yaml.example` | 493 | `0644` | Root / Shared | `74569687f11fd204a074a72e5389c10466cefae2ba7a324c008b8aae766ae436` |
 | `shared/templates/01-netplan-vm2.yaml.example` | 498 | `0644` | Root / Shared | `1ccffbb5653831239e011077b644e794b8848d6f9571ef9a27fb83f6d2aee43a` |
 | `shared/templates/hosts.example` | 155 | `0644` | Root / Shared | `27baa2f36776d67d9bb6330371f8c5d7b538bfde3aa6c05f74c353436cc34e36` |
 | `tests/smoke-test.sh` | 5757 | `0755` | Testing / CI | `d8ea4cd1d742de739c4aaa0f043e9300f43b52510ce92347d94953fae1dac4e5` |
-| `tests/test-fresh-install-blockers.sh` | 133437 | `0775` | Testing / CI | `fd47642f2838ccadbe07997f8a12c5a83192471b7ab6da8b9cffafc8fe376848` |
+| `tests/test-fresh-install-blockers.sh` | 143968 | `0775` | Testing / CI | `f09441a60d347bba25e641f36626e5d4739a68dddd8fa633eb413ae8c77369da` |
 | `tests/validate-installers.sh` | 6182 | `0775` | Testing / CI | `804aad743bd20f21b65fe44a13d3015909934ad81a8c5056b1d45a9cf56ae504` |
 | `tests/validate-layout.sh` | 6413 | `0755` | Testing / CI | `f45722ce6eb41fb5b420a253cf2c8fa4e8fb2dda8ec3d078d8e997558113fe6c` |
 | `vm1/README.md` | 4720 | `0664` | VM1 (Client) | `fdbb1d628cfdc29c042046084649fcb9b293f9504955c630938ade53ff495d78` |
@@ -1358,8 +1358,8 @@
 | `vm2/services/custom-ci/main.go` | 29176 | `0644` | VM2 (Server) | `dd7cd2fb61a45dde0081341a513ad18be179e2c592e50ad5b5a5fc54aa7067af` |
 | `vm2/services/custom-ci/quarantine_test.go` | 7601 | `0644` | VM2 (Server) | `5f2c60ab758f893c7886188a9c7128b64399b97c0e906ffd44650758176681d6` |
 | `vm2/services/custom-ci/verify-attest.go` | 3023 | `0644` | VM2 (Server) | `72be4d7b9852946a3cefbc859d0da170a9705e6d7899e7e8ef1139e9f656cde6` |
-| `windows/README.md` | 4391 | `0664` | Windows Host | `af381c53a043b89417a5b19dbd0de5d55e9489f3c52f45a91acd1f243b6a037d` |
-| `windows/fresh-install.ps1` | 23913 | `0664` | Windows Host | `9de820dbe01d3cbdb58dab5b6766b610c3ce72bb09d7e68291113db73b08cbbf` |
+| `windows/README.md` | 4995 | `0664` | Windows Host | `743891413a74fb9f8196cd820b90059a5cad6dee6188ee43cb0a19df7a57090a` |
+| `windows/fresh-install.ps1` | 29898 | `0664` | Windows Host | `bd3b235753cf8f4a0bbd86f75cf3901f7f671e980cc1de5af183bba713e6bf57` |
 | `windows/preflight.ps1` | 6183 | `0664` | Windows Host | `1ae88da1135ae0776033507f3e9e6f97763aaffc62aa9f6b11e571aea5b22931` |
 | `windows/setup-pipejack.ps1` | 16570 | `0664` | Windows Host | `bf37c05251348e70a9539712f7c6890921ecbc5d9a5d3cffec9a3144921ff6cc` |
 | `windows/verify-pipejack.ps1` | 7674 | `0664` | Windows Host | `86de940e8ddb45a3133f33b96bf99229177bc9c4f026c101026e043cfe5c4234` |

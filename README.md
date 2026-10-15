@@ -139,21 +139,51 @@ pipejack-deployment-kit/
 
 ### Method 0: Fresh Two-VM Guided Onboarding (Recommended for New Laptops)
 
-If you are setting up PipeJack on a new laptop with two newly created Ubuntu 24.04 or 22.04 VMs, use the automated guided onboarding installer. It validates host OpenSSH, assists with SSH public keys, deploys VM2 first, waits for health, deploys VM1 second, verifies the cluster, and saves an audit log outside the repository:
+If you are deploying PipeJack onto a new laptop with two clean Ubuntu 24.04 or 22.04 LTS virtual machines, follow this streamlined onboarding workflow:
+
+#### Step 1: Prepare the Two Virtual Machines in VMware
+1. **Create Two Ubuntu VMs:**
+   - **VM2 (Security Orchestrator):** 2-4 vCPU, 4-8 GB RAM, 20-40 GB disk.
+   - **VM1 (Workload Client):** 2 vCPU, 2-4 GB RAM, 20 GB disk.
+2. **Configure Dual Network Adapters on Both VMs:**
+   - **Network Adapter 1:** Set to **NAT** (provides internet access for packages and container images).
+   - **Network Adapter 2:** Set to **Host-only** (connected to the private `192.168.88.0/24` lab switch).
+3. **Ensure OpenSSH Server is Active on Both VMs:**
+   ```bash
+   sudo apt-get update && sudo apt-get install -y openssh-server
+   sudo systemctl enable --now ssh
+   ```
+
+#### Step 2: Bootstrap Guest VM Networking
+Obtain and execute the network bootstrapper directly on each guest VM:
+
+- **On VM2 (Security Orchestrator):**
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/ramKarthik57/pipejack-deployment-kit/feat/fresh-two-vm-onboarding/shared/bootstrap-network.sh -o bootstrap-network.sh
+  sudo bash bootstrap-network.sh --role vm2
+  ```
+
+- **On VM1 (Workload Client):**
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/ramKarthik57/pipejack-deployment-kit/feat/fresh-two-vm-onboarding/shared/bootstrap-network.sh -o bootstrap-network.sh
+  sudo bash bootstrap-network.sh --role vm1
+  ```
+
+#### Step 3: Run the Guided Master Onboarding Installer on Windows
+Open PowerShell on your Windows host and execute the single-branch onboarding command:
 
 ```powershell
-# 1. Open PowerShell and navigate to the deployment kit
-cd pipejack-deployment-kit\windows
-
-# 2. Run the guided master onboarding installer (prompts with safe defaults)
-powershell -ExecutionPolicy Bypass -File .\fresh-install.ps1
-
-# Or non-interactive / automated:
-powershell -ExecutionPolicy Bypass -File .\fresh-install.ps1 -NonInteractive -VM1_IP 192.168.88.132 -VM2_IP 192.168.88.133
+git clone --branch feat/fresh-two-vm-onboarding --single-branch https://github.com/ramKarthik57/pipejack-deployment-kit.git
+cd pipejack-deployment-kit
+powershell.exe -ExecutionPolicy Bypass -File .\windows\fresh-install.ps1
 ```
 
+> [!IMPORTANT]
+> **Hard VM2 Health Deployment Gate:**
+> `fresh-install.ps1` deploys VM2 first and strictly verifies that the CI Orchestrator (`:8888`), Demo Console (`:8090`), and Docker Registry (`:5000`) achieve a healthy state before VM1 deployment is allowed to begin. If any service fails to report healthy, the installer terminates with actionable diagnostics and preserves the failure log outside the repository in `%USERPROFILE%\PipeJack-Reports\`.
+
 > [!NOTE]
-> For complete VMware virtual machine setup steps, static networking configuration, and the 10-point Acceptance Checklist, consult the comprehensive [Fresh Installation Guide](docs/FRESH_INSTALL.md).
+> For in-depth VMware configuration details, Netplan fallback configurations, and the 10-point Acceptance Checklist, consult the complete [Fresh Installation Guide](docs/FRESH_INSTALL.md).
 
 ---
 

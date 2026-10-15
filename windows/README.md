@@ -34,15 +34,22 @@ This directory contains PowerShell orchestration scripts for deploying, verifyin
 
 ## 3. Quick Start: Fresh Two-VM Onboarding
 
-For a fresh deployment onto two newly created virtual machines:
+Because onboarding automation (`fresh-install.ps1` and `bootstrap-network.sh`) is published on the `feat/fresh-two-vm-onboarding` branch, clone that specific branch on the Windows host:
 
 ```powershell
-# 1. Run the interactive onboarding installer
-powershell -ExecutionPolicy Bypass -File .\fresh-install.ps1
-
-# 2. Or run non-interactively with custom arguments:
-powershell -ExecutionPolicy Bypass -File .\fresh-install.ps1 -NonInteractive -VM1_IP 192.168.88.132 -VM2_IP 192.168.88.133
+git clone --branch feat/fresh-two-vm-onboarding --single-branch https://github.com/ramKarthik57/pipejack-deployment-kit.git
+cd pipejack-deployment-kit
+powershell.exe -ExecutionPolicy Bypass -File .\windows\fresh-install.ps1
 ```
+
+Or run non-interactively with explicit arguments:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\windows\fresh-install.ps1 -NonInteractive -VM1_IP 192.168.88.132 -VM2_IP 192.168.88.133
+```
+
+> [!IMPORTANT]
+> **Hard VM2 Deployment Gate:** `fresh-install.ps1` deploys VM2 first and immediately polls all three core services: CI server (`:8888`), Demo Console (`:8090`), and Docker Registry (`:5000`). If any service is unhealthy, the installer fails fast and aborts immediately without attempting VM1 deployment or verification.
 
 ### Parameters Supported by `fresh-install.ps1`:
 - `-VM1_IP`: IPv4 of VM1 (default: `192.168.88.132`)

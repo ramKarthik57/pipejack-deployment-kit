@@ -87,18 +87,30 @@ PipeJack requires two isolated network paths on each VM:
 - **NAT Network:** Outbound internet for OS packages and Docker container images.
 
 ### Automated Network Setup (Recommended):
-We provide an automated bootstrap script in `shared/bootstrap-network.sh` that detects your network interfaces, creates backups of existing configs, sets up static routing, and prevents default route conflicts:
+On a fresh Ubuntu VM with internet access on its NAT interface, download and execute the bootstrapper directly. Keep VM1 and VM2 commands distinct:
 
-1. **On VM2 (Security Orchestrator):**
-   ```bash
-   # From your Windows host, copy shared/bootstrap-network.sh or run directly:
-   sudo bash shared/bootstrap-network.sh --role vm2
-   ```
+#### On VM2 (Security Orchestrator):
+```bash
+curl -fsSL https://raw.githubusercontent.com/ramKarthik57/pipejack-deployment-kit/feat/fresh-two-vm-onboarding/shared/bootstrap-network.sh -o bootstrap-network.sh
+sudo bash bootstrap-network.sh --role vm2
+```
 
-2. **On VM1 (Workload Client):**
-   ```bash
-   sudo bash shared/bootstrap-network.sh --role vm1
-   ```
+#### On VM1 (Workload Client):
+```bash
+curl -fsSL https://raw.githubusercontent.com/ramKarthik57/pipejack-deployment-kit/feat/fresh-two-vm-onboarding/shared/bootstrap-network.sh -o bootstrap-network.sh
+sudo bash bootstrap-network.sh --role vm1
+```
+
+> [!TIP]
+> **Alternative (Git Clone on Guest):**
+> If git is installed, you can clone the onboarding branch directly on each VM:
+> ```bash
+> git clone --branch feat/fresh-two-vm-onboarding --single-branch https://github.com/ramKarthik57/pipejack-deployment-kit.git
+> cd pipejack-deployment-kit
+> sudo bash shared/bootstrap-network.sh --role vm2   # On VM2
+> # Or on VM1:
+> sudo bash shared/bootstrap-network.sh --role vm1   # On VM1
+> ```
 
 What `bootstrap-network.sh` does automatically:
 - Auto-discovers your private interface (e.g., `ens33`, `ens34`) and NAT interface (e.g., `ens37`, `ens38`).
@@ -209,11 +221,21 @@ On your Windows workstation:
 
 ## 5. Step 4: Run the Master Guided Installer
 
-From your Windows workstation, run the single onboarding entry point:
+From your Windows workstation, clone the onboarding branch and run the master installer from the repository root:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File windows\fresh-install.ps1
+git clone --branch feat/fresh-two-vm-onboarding --single-branch https://github.com/ramKarthik57/pipejack-deployment-kit.git
+cd pipejack-deployment-kit
+powershell.exe -ExecutionPolicy Bypass -File .\windows\fresh-install.ps1
 ```
+
+> [!IMPORTANT]
+> **Hard VM2 Health Deployment Gate:**
+> `fresh-install.ps1` deploys VM2 first and strictly enforces a hard deployment gate on service readiness. It continuously polls:
+> - **CI Orchestrator (`:8888`):** `http://${VM2_IP}:8888/health` (expects status: `ok`)
+> - **Web Demo Console (`:8090`):** `http://${VM2_IP}:8090/api/status` (expects `ci_healthy: true`)
+> - **Docker Registry (`:5000`):** `http://${VM2_IP}:5000/v2/` (expects HTTP 200)
+> If any service fails to report healthy within 60 seconds, deployment halts immediately with detailed diagnostics. **VM1 deployment is blocked and will not execute**, preventing half-configured or broken environments.
 
 ### Interactive Experience:
 The script will prompt you with clear, safe defaults:

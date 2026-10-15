@@ -10,10 +10,10 @@
 
     Orchestrates the full deployment lifecycle:
     1. Validates host environment (OpenSSH tools, deployment kit structure).
-    2. Validates network and SSH reachability (with optional public key setup).
+    2. Validates network and SSH reachability (with automated public key setup helper).
     3. Executes read-only preflight checks (preflight.ps1).
     4. Deploys VM2 Server Orchestrator first (setup-pipejack.ps1 -SkipVM1).
-    5. Polls VM2 services until healthy (CI Orchestrator :8888, Web Console :8090).
+    5. Enforces HARD GATE on VM2 health: CI (:8888), Console (:8090), Registry (:5000).
     6. Deploys VM1 Workload Client second (setup-pipejack.ps1 -SkipVM2).
     7. Runs comprehensive end-to-end verification (verify-pipejack.ps1).
     8. Generates a timestamped deployment report outside the repository.
@@ -73,11 +73,22 @@ param(
     [switch]$InteractiveSudo,
     [switch]$SkipVM1,
     [switch]$SkipVM2,
+    [switch]$SkipPreflight,
     [switch]$SkipVerify,
     [string]$ReportDir = ""
 )
 
 $ErrorActionPreference = "Stop"
+
+# Status tracking across all phases
+$Phase1_HostTools    = "PASS"
+$Phase2_Preflight    = "NOT EXECUTED"
+$Phase3_VM2_Deploy   = "NOT EXECUTED"
+$VM2_CI_Status       = "NOT EXECUTED"
+$VM2_Console_Status  = "NOT EXECUTED"
+$VM2_Registry_Status = "NOT EXECUTED"
+$Phase4_VM1_Deploy   = "NOT EXECUTED"
+$Phase5_Verification = "NOT EXECUTED"
 
 # Pure ASCII Banner
 Write-Host "============================================================" -ForegroundColor Cyan
@@ -242,6 +253,7 @@ foreach ($kf in $RequiredKitFiles) {
 }
 if ($MissingFiles -gt 0) {
     Write-Host "[-] ERROR: Deployment kit directory is incomplete ($MissingFiles missing files)." -ForegroundColor Red
+    $Phase1_HostTools = "FAIL"
     exit 1
 }
 
@@ -258,8 +270,11 @@ if (-not (Get-Command $SSH_CMD -ErrorAction SilentlyContinue) -or -not (Get-Comm
     Write-Host "    Open an elevated PowerShell window and run:" -ForegroundColor Gray
     Write-Host "      Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0" -ForegroundColor Gray
     Write-Host "    Or install via Settings > Apps > Optional Features > OpenSSH Client." -ForegroundColor Gray
+    $Phase1_HostTools = "FAIL"
     exit 1
 }
+
+$Phase1_HostTools = "PASS"
 
 # -----------------------------------------------------------------------------
 # 6. Setup Logging and Report Directory
@@ -286,6 +301,53 @@ function Write-Log {
     param([string]$Message, [string]$Level = "INFO")
     $line = "[$([DateTime]::UtcNow.ToString('yyyy-MM-dd HH:mm:ss')) UTC] [$Level] $Message"
     Add-Content -Path $ReportFile -Value $line -Encoding Ascii
+}
+
+function Write-FinalSummary {
+    param([string]$Verdict)
+
+    $SummaryContent = @"
+============================================================
+ PIPEJACK FRESH TWO-VM ONBOARDING SUMMARY
+============================================================
+ Timestamp (UTC):     $([DateTime]::UtcNow.ToString('yyyy-MM-dd HH:mm:ss'))
+ Host Machine:        $($env:COMPUTERNAME) (Windows, PowerShell $($PSVersionTable.PSVersion))
+ Target VM1 Client:   $SSHUser@$VM1_IP
+ Target VM2 Server:   $SSHUser@$VM2_IP
+ Deployment Mode:     $(if ($DryRun) { 'DRY-RUN / PREVIEW' } else { 'LIVE DEPLOYMENT' })
+
+ Phase Results:
+   1. Host OpenSSH & Kit Files:  $Phase1_HostTools
+   2. SSH & Preflight Checks:    $Phase2_Preflight
+   3. VM2 Server Deployment:     $Phase3_VM2_Deploy
+      - CI Orchestrator (:8888): $VM2_CI_Status
+      - Demo Console (:8090):    $VM2_Console_Status
+      - Local Registry (:5000):  $VM2_Registry_Status
+   4. VM1 Client Deployment:     $Phase4_VM1_Deploy
+   5. End-to-End Verification:   $Phase5_Verification
+
+ Overall Deployment Verdict:     $Verdict
+
+ Service Endpoints:
+   - Web Demo Console:           http://${VM2_IP}:8090
+   - CI Upload Endpoint:         http://${VM2_IP}:8888/upload
+   - CI Health Endpoint:         http://${VM2_IP}:8888/health
+   - Local Docker Registry:      http://${VM2_IP}:5000
+
+ Artifacts & Reports:
+   - Detailed Session Log:       $ReportFile
+   - Deployment Summary:         $SummaryFile
+============================================================
+"@
+
+    Set-Content -Path $SummaryFile -Value $SummaryContent -Encoding Ascii
+    Write-Log "Final deployment summary written to $SummaryFile"
+
+    $color = if ($Verdict -eq "PASS" -or $Verdict -eq "DRY-RUN-COMPLETE") { "Green" } else { "Red" }
+    Write-Host "`n$SummaryContent" -ForegroundColor $color
+
+    Write-Host "`n[+] Full installation log preserved at: $ReportFile" -ForegroundColor Cyan
+    Write-Host "[+] Installation summary preserved at: $SummaryFile" -ForegroundColor Cyan
 }
 
 Write-Log "PipeJack Fresh Install Session Initialized"
@@ -387,28 +449,37 @@ foreach ($t in $TargetsToCheck) {
 # 8. Step 2/5: Preflight Inspection
 # -----------------------------------------------------------------------------
 
-Write-Host "`n[+] Step 2/5: Executing System Preflight Verification..." -ForegroundColor Cyan
-Write-Log "Invoking preflight.ps1"
+if (-not $SkipPreflight) {
+    Write-Host "`n[+] Step 2/5: Executing System Preflight Verification..." -ForegroundColor Cyan
+    Write-Log "Invoking preflight.ps1"
 
-$PreflightScript = Join-Path $PSScriptRoot "preflight.ps1"
-$PreflightParams = @{
-    VM1_IP  = $VM1_IP
-    VM2_IP  = $VM2_IP
-    SSHUser = $SSHUser
-    SSHPort = $SSHPort
-    KitDir  = $KitDir
-}
-if ($SSHKey) { $PreflightParams["SSHKey"] = $SSHKey }
-
-& $PreflightScript @PreflightParams
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "[-] Preflight verification reported blocking issues." -ForegroundColor Red
-    Write-Log "Preflight verification failed with exit code $LASTEXITCODE" "ERROR"
-    if (-not $DryRun) {
-        exit 1
+    $PreflightScript = Join-Path $PSScriptRoot "preflight.ps1"
+    $PreflightParams = @{
+        VM1_IP  = $VM1_IP
+        VM2_IP  = $VM2_IP
+        SSHUser = $SSHUser
+        SSHPort = $SSHPort
+        KitDir  = $KitDir
     }
+    if ($SSHKey) { $PreflightParams["SSHKey"] = $SSHKey }
+
+    & $PreflightScript @PreflightParams
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[-] Preflight verification reported blocking issues." -ForegroundColor Red
+        Write-Log "Preflight verification failed with exit code $LASTEXITCODE" "ERROR"
+        $Phase2_Preflight = "FAIL"
+        if (-not $DryRun) {
+            Write-FinalSummary -Verdict "FAIL"
+            exit 1
+        }
+    } else {
+        $Phase2_Preflight = "PASS"
+        Write-Log "Preflight verification completed successfully"
+    }
+} else {
+    Write-Host "`n[!] Notice: Skipping preflight inspection as requested (-SkipPreflight)." -ForegroundColor Yellow
+    $Phase2_Preflight = "SKIPPED"
 }
-Write-Log "Preflight verification completed successfully"
 
 # -----------------------------------------------------------------------------
 # 9. Step 3/5: Deploy VM2 Server Orchestrator First
@@ -439,56 +510,127 @@ if (-not $SkipVM2) {
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[-] Deployment of VM2 failed." -ForegroundColor Red
         Write-Log "VM2 deployment failed with exit code $LASTEXITCODE" "ERROR"
+        $Phase3_VM2_Deploy = "FAIL"
+        Write-FinalSummary -Verdict "FAIL"
         exit 1
     }
     Write-Log "VM2 deployment completed successfully"
+    $Phase3_VM2_Deploy = if ($DryRun) { "DRY-RUN (SIMULATED)" } else { "PASS" }
 
-    # Health Check Polling for VM2 Services
+    # -------------------------------------------------------------------------
+    # HARD DEPLOYMENT GATE: VM2 Service Health Verification
+    # -------------------------------------------------------------------------
     if (-not $DryRun) {
-        Write-Host "`n[+] Awaiting VM2 Service Readiness (CI Orchestrator :8888, Web Console :8090)..." -ForegroundColor Cyan
-        $maxRetries = 20
-        $retryDelay = 3
-        $vm2Healthy = $false
+        Write-Host "`n[+] Awaiting VM2 Service Readiness (CI Orchestrator :8888, Demo Console :8090, Docker Registry :5000)..." -ForegroundColor Cyan
+        $maxRetries = if ($env:PIPEJACK_HEALTH_RETRIES) { [int]$env:PIPEJACK_HEALTH_RETRIES } else { 20 }
+        $retryDelay = if ($env:PIPEJACK_HEALTH_DELAY) { [int]$env:PIPEJACK_HEALTH_DELAY } else { 3 }
+        $ciHealthy = $false
+        $conHealthy = $false
+        $regHealthy = $false
 
-        for ($i = 1; $i -le $maxRetries; $i++) {
-            Write-Host "  Health probe attempt $i/$maxRetries..." -NoNewline
-            $probeUrl = "http://${VM2_IP}:8888/health"
-            $probeSuccess = $false
+        if ($env:PIPEJACK_MOCK_HEALTH -eq "pass") {
+            $ciHealthy = $true
+            $conHealthy = $true
+            $regHealthy = $true
+            Write-Host " [MOCK ONLINE: CI=OK, Console=OK, Registry=OK]" -ForegroundColor Green
+        } elseif ($env:PIPEJACK_MOCK_HEALTH -eq "fail") {
+            $ciHealthy = $false
+            $conHealthy = $false
+            $regHealthy = $false
+            Write-Host " [MOCK FAILED: CI=FAIL, Console=FAIL, Registry=FAIL]" -ForegroundColor Yellow
+        } else {
+            for ($i = 1; $i -le $maxRetries; $i++) {
+                Write-Host "  Health probe attempt $i/$maxRetries..." -NoNewline
 
-            try {
-                $response = Invoke-RestMethod -Uri $probeUrl -Method Get -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop
-                if ($response -and $response.status -eq "ok") {
-                    $probeSuccess = $true
-                }
-            } catch {
-                # Fallback probe via curl.exe if available
-                if (Get-Command "curl.exe" -ErrorAction SilentlyContinue) {
-                    $curlOut = & curl.exe -s -m 3 "http://${VM2_IP}:8888/health" 2>$null
-                    if ($curlOut -match '"status"\s*:\s*"ok"') {
-                        $probeSuccess = $true
+                # 1. Probe CI Orchestrator (:8888)
+                if (-not $ciHealthy) {
+                try {
+                    $ciResp = Invoke-RestMethod -Uri "http://${VM2_IP}:8888/health" -Method Get -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop
+                    if ($ciResp -and $ciResp.status -eq "ok") {
+                        $ciHealthy = $true
+                    }
+                } catch {
+                    if (Get-Command "curl.exe" -ErrorAction SilentlyContinue) {
+                        $cOut = & curl.exe -s -m 3 "http://${VM2_IP}:8888/health" 2>$null
+                        if ($cOut -match '"status"\s*:\s*"ok"') { $ciHealthy = $true }
                     }
                 }
             }
 
-            if ($probeSuccess) {
-                Write-Host " [ONLINE]" -ForegroundColor Green
-                $vm2Healthy = $true
+            # 2. Probe Demo Console (:8090)
+            if (-not $conHealthy) {
+                try {
+                    $conResp = Invoke-RestMethod -Uri "http://${VM2_IP}:8090/api/status" -Method Get -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop
+                    if ($conResp) {
+                        $conHealthy = $true
+                    }
+                } catch {
+                    if (Get-Command "curl.exe" -ErrorAction SilentlyContinue) {
+                        $cOut = & curl.exe -s -m 3 "http://${VM2_IP}:8090/api/status" 2>$null
+                        if ($cOut -match 'ci_healthy' -or $LASTEXITCODE -eq 0) { $conHealthy = $true }
+                    }
+                }
+            }
+
+            # 3. Probe Local Docker Registry (:5000)
+            if (-not $regHealthy) {
+                try {
+                    $regResp = Invoke-WebRequest -Uri "http://${VM2_IP}:5000/v2/" -Method Get -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop
+                    if ($regResp.StatusCode -eq 200) {
+                        $regHealthy = $true
+                    }
+                } catch {
+                    if ($_.Exception.Response -and $_.Exception.Response.StatusCode.value__ -eq 200) {
+                        $regHealthy = $true
+                    } elseif (Get-Command "curl.exe" -ErrorAction SilentlyContinue) {
+                        $cOut = & curl.exe -s -I -m 3 "http://${VM2_IP}:5000/v2/" 2>$null
+                        if ($cOut -match "200 OK") { $regHealthy = $true }
+                    }
+                }
+            }
+
+            if ($ciHealthy -and $conHealthy -and $regHealthy) {
+                Write-Host " [ONLINE: CI=OK, Console=OK, Registry=OK]" -ForegroundColor Green
                 break
             } else {
-                Write-Host " [WAITING]" -ForegroundColor Yellow
+                $statusSummary = "Waiting (CI=$([string]$ciHealthy), Console=$([string]$conHealthy), Registry=$([string]$regHealthy))"
+                Write-Host " [$statusSummary]" -ForegroundColor Yellow
                 Start-Sleep -Seconds $retryDelay
             }
         }
+    }
 
-        if (-not $vm2Healthy) {
-            Write-Host "[-] WARNING: VM2 CI Orchestrator did not respond with status: ok within $($maxRetries * $retryDelay) seconds." -ForegroundColor Yellow
-            Write-Log "VM2 CI Orchestrator health check timed out" "WARN"
-        } else {
-            Write-Log "VM2 CI Orchestrator confirmed healthy"
+    $VM2_CI_Status       = if ($ciHealthy) { "PASS" } else { "FAIL" }
+    $VM2_Console_Status  = if ($conHealthy) { "PASS" } else { "FAIL" }
+    $VM2_Registry_Status = if ($regHealthy) { "PASS" } else { "FAIL" }
+
+        # HARD GATE ENFORCEMENT: Fail fast if any required VM2 service is down
+        if ($VM2_CI_Status -ne "PASS" -or $VM2_Console_Status -ne "PASS" -or $VM2_Registry_Status -ne "PASS") {
+            Write-Host "`n[-] HARD DEPLOYMENT GATE FAILED: One or more required VM2 services did not achieve healthy state." -ForegroundColor Red
+            Write-Host "    Deployment cannot safely proceed to VM1. Deploying VM1 is BLOCKED." -ForegroundColor Red
+            if ($VM2_CI_Status -eq "FAIL") {
+                Write-Host "    * CI Orchestrator (:8888): FAILED - Diagnostic: Check 'sudo systemctl status pipejack-ci' and '/var/log/pipejack-ci.log' on $VM2_IP" -ForegroundColor Yellow
+            }
+            if ($VM2_Console_Status -eq "FAIL") {
+                Write-Host "    * Web Demo Console (:8090): FAILED - Diagnostic: Check 'sudo systemctl status pipejack-demo-console' and '~/pipejack-demo-console/console.log' on $VM2_IP" -ForegroundColor Yellow
+            }
+            if ($VM2_Registry_Status -eq "FAIL") {
+                Write-Host "    * Docker Registry (:5000): FAILED - Diagnostic: Check 'docker ps' and 'docker start registry' on $VM2_IP" -ForegroundColor Yellow
+            }
+            Write-Log "HARD GATE FAILED: CI=$VM2_CI_Status, Console=$VM2_Console_Status, Registry=$VM2_Registry_Status" "ERROR"
+
+            $Phase4_VM1_Deploy = "NOT EXECUTED"
+            $Phase5_Verification = "NOT EXECUTED"
+            Write-FinalSummary -Verdict "FAIL"
+            exit 1
         }
+
+        Write-Host "  [OK] All VM2 core services confirmed healthy (CI: PASS, Console: PASS, Registry: PASS)." -ForegroundColor Green
+        Write-Log "VM2 core services confirmed healthy (CI: PASS, Console: PASS, Registry: PASS)"
     }
 } else {
     Write-Host "`n[!] Notice: Skipping VM2 deployment as requested (-SkipVM2)." -ForegroundColor Yellow
+    $Phase3_VM2_Deploy = "SKIPPED"
 }
 
 # -----------------------------------------------------------------------------
@@ -518,18 +660,21 @@ if (-not $SkipVM1) {
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[-] Deployment of VM1 failed." -ForegroundColor Red
         Write-Log "VM1 deployment failed with exit code $LASTEXITCODE" "ERROR"
+        $Phase4_VM1_Deploy = "FAIL"
+        Write-FinalSummary -Verdict "FAIL"
         exit 1
     }
     Write-Log "VM1 deployment completed successfully"
+    $Phase4_VM1_Deploy = if ($DryRun) { "DRY-RUN (SIMULATED)" } else { "PASS" }
 } else {
     Write-Host "`n[!] Notice: Skipping VM1 deployment as requested (-SkipVM1)." -ForegroundColor Yellow
+    $Phase4_VM1_Deploy = "SKIPPED"
 }
 
 # -----------------------------------------------------------------------------
 # 11. Step 5/5: Post-Deployment Verification
 # -----------------------------------------------------------------------------
 
-$VerificationStatus = "SKIPPED"
 if (-not $SkipVerify -and -not $DryRun) {
     Write-Host "`n[+] Step 5/5: Executing Post-Deployment Cluster Verification..." -ForegroundColor Cyan
     Write-Log "Invoking verify-pipejack.ps1"
@@ -544,62 +689,35 @@ if (-not $SkipVerify -and -not $DryRun) {
 
     & $VerifyScript @VerifyParams
     if ($LASTEXITCODE -eq 0) {
-        $VerificationStatus = "PASSED"
+        $Phase5_Verification = "PASS"
         Write-Log "Verification script passed without errors"
     } else {
-        $VerificationStatus = "FAILED"
+        $Phase5_Verification = "FAIL"
         Write-Log "Verification script reported failures (exit code: $LASTEXITCODE)" "ERROR"
+        Write-FinalSummary -Verdict "FAIL"
+        exit 1
     }
 } elseif ($DryRun) {
-    $VerificationStatus = "DRY-RUN (SKIPPED)"
+    $Phase5_Verification = "DRY-RUN (NOT EXECUTED)"
+} else {
+    $Phase5_Verification = "SKIPPED"
 }
 
 # -----------------------------------------------------------------------------
-# 12. Generate Final Report & Summary
+# 12. Final Verdict & Summary Output
 # -----------------------------------------------------------------------------
 
-$OverallVerdict = if ($DryRun) { "DRY-RUN-COMPLETE" } elseif ($VerificationStatus -eq "PASSED") { "SUCCESS" } else { "ATTENTION-REQUIRED" }
+$OverallVerdict = if ($DryRun) {
+    "DRY-RUN-COMPLETE"
+} elseif ($Phase1_HostTools -eq "PASS" -and ($SkipPreflight -or $Phase2_Preflight -eq "PASS") -and ($SkipVM2 -or $Phase3_VM2_Deploy -eq "PASS") -and ($SkipVM1 -or $Phase4_VM1_Deploy -eq "PASS") -and ($SkipVerify -or $Phase5_Verification -eq "PASS")) {
+    "PASS"
+} else {
+    "FAIL"
+}
 
-$SummaryContent = @"
-============================================================
- PIPEJACK FRESH TWO-VM ONBOARDING SUMMARY
-============================================================
- Timestamp (UTC):     $([DateTime]::UtcNow.ToString('yyyy-MM-dd HH:mm:ss'))
- Host Machine:        $($env:COMPUTERNAME) (Windows, PowerShell $($PSVersionTable.PSVersion))
- Target VM1 Client:   $SSHUser@$VM1_IP
- Target VM2 Server:   $SSHUser@$VM2_IP
- Deployment Mode:     $(if ($DryRun) { 'DRY-RUN / PREVIEW' } else { 'LIVE DEPLOYMENT' })
+Write-FinalSummary -Verdict $OverallVerdict
 
- Phase Results:
-   1. Host OpenSSH & Kit Files:  PASSED
-   2. SSH & Preflight Checks:    PASSED
-   3. VM2 Server Deployment:     $(if ($SkipVM2) { 'SKIPPED' } else { 'COMPLETED' })
-   4. VM1 Client Deployment:     $(if ($SkipVM1) { 'SKIPPED' } else { 'COMPLETED' })
-   5. End-to-End Verification:   $VerificationStatus
-
- Overall Deployment Verdict:     $OverallVerdict
-
- Service Endpoints:
-   - Web Demo Console:           http://${VM2_IP}:8090
-   - CI Upload Endpoint:         http://${VM2_IP}:8888/upload
-   - CI Health Endpoint:         http://${VM2_IP}:8888/health
-   - Local Docker Registry:      http://${VM2_IP}:5000
-
- Artifacts & Reports:
-   - Detailed Session Log:       $ReportFile
-   - Deployment Summary:         $SummaryFile
-============================================================
-"@
-
-Set-Content -Path $SummaryFile -Value $SummaryContent -Encoding Ascii
-Write-Log "Final deployment summary written to $SummaryFile"
-
-Write-Host "`n$SummaryContent" -ForegroundColor $(if ($OverallVerdict -eq "SUCCESS" -or $OverallVerdict -eq "DRY-RUN-COMPLETE") { "Green" } else { "Yellow" })
-
-Write-Host "`n[+] Full installation log preserved at: $ReportFile" -ForegroundColor Cyan
-Write-Host "[+] Installation summary preserved at: $SummaryFile" -ForegroundColor Cyan
-
-if ($OverallVerdict -eq "ATTENTION-REQUIRED") {
+if ($OverallVerdict -eq "FAIL") {
     exit 1
 }
 
