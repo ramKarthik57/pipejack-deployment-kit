@@ -3167,8 +3167,11 @@ register_test_path "$MOCK_NETPLAN_BIN"
 
 cat << 'EOF' > "$MOCK_NETPLAN_BIN/netplan"
 #!/usr/bin/env bash
-echo "mock netplan generate failure" >&2
-exit 1
+if [ "$1" = "generate" ] && [ -f "$PIPEJACK_NETPLAN_DIR/01-pipejack-netcfg.yaml" ]; then
+    echo "mock netplan generate failure on new config" >&2
+    exit 1
+fi
+exit 0
 EOF
 chmod +x "$MOCK_NETPLAN_BIN/netplan"
 
@@ -3194,39 +3197,257 @@ safe_delete_path "$MOCK_NETPLAN_BIN"
 safe_delete_path "$MOCK_NETPLAN_DIR"
 safe_delete_path "$MOCK_SYSFS_7"
 
-# 8. Repeated bootstrap attempt is idempotent
-MOCK_SYSFS_8=""
-create_safe_tmp_dir MOCK_SYSFS_8 "/tmp/pipejack-mock-sysfs-XXXXXX" || { echo "[-] Failed to create mock sysfs dir" >&2; exit 1; }
-register_test_path "$MOCK_SYSFS_8"
-mkdir -p "$MOCK_SYSFS_8/ens33" "$MOCK_SYSFS_8/ens34"
+# 8. CIDR subnet overlap detection with non-identical prefixes (192.168.80.50/20 vs 192.168.88.132/24)
+MOCK_SYSFS_CIDR=""
+create_safe_tmp_dir MOCK_SYSFS_CIDR "/tmp/pipejack-mock-sysfs-cidr-XXXXXX" || { echo "[-] Failed to create mock sysfs dir" >&2; exit 1; }
+register_test_path "$MOCK_SYSFS_CIDR"
+mkdir -p "$MOCK_SYSFS_CIDR/ens33" "$MOCK_SYSFS_CIDR/ens34"
 
-MOCK_IDEMP_DIR=""
-create_safe_tmp_dir MOCK_IDEMP_DIR "/tmp/pipejack-mock-idemp-XXXXXX" || { echo "[-] Failed to create mock idemp dir" >&2; exit 1; }
-register_test_path "$MOCK_IDEMP_DIR"
+MOCK_NETPLAN_CIDR=""
+create_safe_tmp_dir MOCK_NETPLAN_CIDR "/tmp/pipejack-mock-netplan-cidr-XXXXXX" || { echo "[-] Failed to create mock netplan dir" >&2; exit 1; }
+register_test_path "$MOCK_NETPLAN_CIDR"
 
-MOCK_IDEMP_BIN=""
-create_safe_tmp_dir MOCK_IDEMP_BIN "/tmp/pipejack-mock-ibin-XXXXXX" || { echo "[-] Failed to create mock ibin dir" >&2; exit 1; }
-register_test_path "$MOCK_IDEMP_BIN"
+ORIG_CIDR_CONF="$MOCK_NETPLAN_CIDR/50-cloud-init.yaml"
+echo "network: {version: 2}" > "$ORIG_CIDR_CONF"
 
-cat << 'EOF' > "$MOCK_IDEMP_BIN/netplan"
+MOCK_BIN_CIDR=""
+create_safe_tmp_dir MOCK_BIN_CIDR "/tmp/pipejack-mock-bin-cidr-XXXXXX" || { echo "[-] Failed to create mock bin dir" >&2; exit 1; }
+register_test_path "$MOCK_BIN_CIDR"
+
+cat << 'EOF' > "$MOCK_BIN_CIDR/ip"
+#!/usr/bin/env bash
+if [ "$1" = "-4" ] && [ "$2" = "addr" ] && [ "$3" = "show" ]; then
+    echo "    inet 192.168.80.50/20 brd 192.168.95.255 scope global ens33"
+    exit 0
+fi
+exit 0
+EOF
+chmod +x "$MOCK_BIN_CIDR/ip"
+
+CIDR_OUT=$(PATH="$MOCK_BIN_CIDR:$PATH" PIPEJACK_SYS_CLASS_NET="$MOCK_SYSFS_CIDR" PIPEJACK_NETPLAN_DIR="$MOCK_NETPLAN_CIDR" "$BOOTSTRAP_SCRIPT" --role vm1 --force --nat-iface ens33 --private-iface ens34 2>&1 || true)
+
+if echo "$CIDR_OUT" | grep -q "Subnet conflict detected" && \
+   echo "$CIDR_OUT" | grep -q "overlaps with private lab subnet" && \
+   [ -f "$ORIG_CIDR_CONF" ] && \
+   [ ! -f "$MOCK_NETPLAN_CIDR/01-pipejack-netcfg.yaml" ]; then
+    echo "  [OK] bootstrap-network.sh detected 32-bit CIDR subnet overlap (192.168.80.50/20) and preserved existing configuration."
+else
+    BOOTSTRAP_TEST_OK=0
+    echo "  [-] bootstrap-network.sh failed CIDR overlap check: $CIDR_OUT" >&2
+fi
+safe_delete_path "$MOCK_BIN_CIDR"
+safe_delete_path "$MOCK_NETPLAN_CIDR"
+safe_delete_path "$MOCK_SYSFS_CIDR"
+
+# 9. Rollback restores pre-existing 01-pipejack-netcfg.yaml rather than deleting it
+MOCK_SYSFS_9=""
+create_safe_tmp_dir MOCK_SYSFS_9 "/tmp/pipejack-mock-sysfs-XXXXXX" || { echo "[-] Failed to create mock sysfs dir" >&2; exit 1; }
+register_test_path "$MOCK_SYSFS_9"
+mkdir -p "$MOCK_SYSFS_9/ens33" "$MOCK_SYSFS_9/ens34"
+
+MOCK_NETPLAN_9=""
+create_safe_tmp_dir MOCK_NETPLAN_9 "/tmp/pipejack-mock-netplan-XXXXXX" || { echo "[-] Failed to create mock netplan dir" >&2; exit 1; }
+register_test_path "$MOCK_NETPLAN_9"
+
+MOCK_BIN_9=""
+create_safe_tmp_dir MOCK_BIN_9 "/tmp/pipejack-mock-bin-XXXXXX" || { echo "[-] Failed to create mock bin dir" >&2; exit 1; }
+register_test_path "$MOCK_BIN_9"
+
+cat << 'EOF' > "$MOCK_BIN_9/netplan"
+#!/usr/bin/env bash
+if [ "$1" = "generate" ] && grep -q "PipeJack Automated Network Configuration" "$PIPEJACK_NETPLAN_DIR"/*.yaml 2>/dev/null; then
+    echo "mock netplan generate failure" >&2
+    exit 1
+fi
+exit 0
+EOF
+chmod +x "$MOCK_BIN_9/netplan"
+
+PRE_EXISTING_NETCFG="$MOCK_NETPLAN_9/01-pipejack-netcfg.yaml"
+echo "pre-existing-pipejack-config-content" > "$PRE_EXISTING_NETCFG"
+chmod 0600 "$PRE_EXISTING_NETCFG"
+
+ROLLBACK_PRE_OUT=$(PATH="$MOCK_BIN_9:$PATH" PIPEJACK_SYS_CLASS_NET="$MOCK_SYSFS_9" PIPEJACK_NETPLAN_DIR="$MOCK_NETPLAN_9" "$BOOTSTRAP_SCRIPT" --role vm1 --force --nat-iface ens33 --private-iface ens34 2>&1 || true)
+
+if echo "$ROLLBACK_PRE_OUT" | grep -q "Network rollback completed" && \
+   [ -f "$PRE_EXISTING_NETCFG" ] && \
+   [ "$(cat "$PRE_EXISTING_NETCFG")" = "pre-existing-pipejack-config-content" ]; then
+    echo "  [OK] bootstrap-network.sh restored pre-existing 01-pipejack-netcfg.yaml on rollback."
+else
+    BOOTSTRAP_TEST_OK=0
+    echo "  [-] bootstrap-network.sh failed to restore pre-existing 01-pipejack-netcfg.yaml: $ROLLBACK_PRE_OUT" >&2
+fi
+safe_delete_path "$MOCK_BIN_9"
+safe_delete_path "$MOCK_NETPLAN_9"
+safe_delete_path "$MOCK_SYSFS_9"
+
+# 10. Pre-existing .yaml.disabled files survive rollback untouched
+MOCK_SYSFS_10=""
+create_safe_tmp_dir MOCK_SYSFS_10 "/tmp/pipejack-mock-sysfs-XXXXXX" || { echo "[-] Failed to create mock sysfs dir" >&2; exit 1; }
+register_test_path "$MOCK_SYSFS_10"
+mkdir -p "$MOCK_SYSFS_10/ens33" "$MOCK_SYSFS_10/ens34"
+
+MOCK_NETPLAN_10=""
+create_safe_tmp_dir MOCK_NETPLAN_10 "/tmp/pipejack-mock-netplan-XXXXXX" || { echo "[-] Failed to create mock netplan dir" >&2; exit 1; }
+register_test_path "$MOCK_NETPLAN_10"
+
+MOCK_BIN_10=""
+create_safe_tmp_dir MOCK_BIN_10 "/tmp/pipejack-mock-bin-XXXXXX" || { echo "[-] Failed to create mock bin dir" >&2; exit 1; }
+register_test_path "$MOCK_BIN_10"
+
+cat << 'EOF' > "$MOCK_BIN_10/netplan"
+#!/usr/bin/env bash
+if [ "$1" = "generate" ] && [ -f "$PIPEJACK_NETPLAN_DIR/01-pipejack-netcfg.yaml" ]; then
+    echo "mock netplan generate failure on new config" >&2
+    exit 1
+fi
+exit 0
+EOF
+chmod +x "$MOCK_BIN_10/netplan"
+
+UNRELATED_DISABLED="$MOCK_NETPLAN_10/99-custom-archive.yaml.disabled"
+echo "unrelated-disabled-archive-sentinel" > "$UNRELATED_DISABLED"
+ORIG_ACTIVE="$MOCK_NETPLAN_10/00-installer.yaml"
+echo "original-active-config" > "$ORIG_ACTIVE"
+
+ROLLBACK_DIS_OUT=$(PATH="$MOCK_BIN_10:$PATH" PIPEJACK_SYS_CLASS_NET="$MOCK_SYSFS_10" PIPEJACK_NETPLAN_DIR="$MOCK_NETPLAN_10" "$BOOTSTRAP_SCRIPT" --role vm1 --force --nat-iface ens33 --private-iface ens34 2>&1 || true)
+
+if echo "$ROLLBACK_DIS_OUT" | grep -q "Network rollback completed" && \
+   [ -f "$UNRELATED_DISABLED" ] && \
+   [ "$(cat "$UNRELATED_DISABLED")" = "unrelated-disabled-archive-sentinel" ] && \
+   [ -f "$ORIG_ACTIVE" ] && \
+   [ "$(cat "$ORIG_ACTIVE")" = "original-active-config" ]; then
+    echo "  [OK] Pre-existing .yaml.disabled files survived rollback untouched."
+else
+    BOOTSTRAP_TEST_OK=0
+    echo "  [-] Pre-existing .yaml.disabled file deleted or altered: $ROLLBACK_DIS_OUT" >&2
+fi
+safe_delete_path "$MOCK_BIN_10"
+safe_delete_path "$MOCK_NETPLAN_10"
+safe_delete_path "$MOCK_SYSFS_10"
+
+# 11. Netplan apply failure triggers rollback and restores configuration
+MOCK_SYSFS_11=""
+create_safe_tmp_dir MOCK_SYSFS_11 "/tmp/pipejack-mock-sysfs-XXXXXX" || { echo "[-] Failed to create mock sysfs dir" >&2; exit 1; }
+register_test_path "$MOCK_SYSFS_11"
+mkdir -p "$MOCK_SYSFS_11/ens33" "$MOCK_SYSFS_11/ens34"
+
+MOCK_NETPLAN_11=""
+create_safe_tmp_dir MOCK_NETPLAN_11 "/tmp/pipejack-mock-netplan-XXXXXX" || { echo "[-] Failed to create mock netplan dir" >&2; exit 1; }
+register_test_path "$MOCK_NETPLAN_11"
+
+MOCK_BIN_11=""
+create_safe_tmp_dir MOCK_BIN_11 "/tmp/pipejack-mock-bin-XXXXXX" || { echo "[-] Failed to create mock bin dir" >&2; exit 1; }
+register_test_path "$MOCK_BIN_11"
+
+cat << 'EOF' > "$MOCK_BIN_11/netplan"
+#!/usr/bin/env bash
+if [ "$1" = "apply" ] && [ -f "$PIPEJACK_NETPLAN_DIR/01-pipejack-netcfg.yaml" ]; then
+    echo "mock netplan apply failure" >&2
+    exit 1
+fi
+exit 0
+EOF
+chmod +x "$MOCK_BIN_11/netplan"
+
+APPLY_CONF="$MOCK_NETPLAN_11/50-cloud.yaml"
+echo "cloud-config-content" > "$APPLY_CONF"
+
+APPLY_OUT=$(PATH="$MOCK_BIN_11:$PATH" PIPEJACK_SYS_CLASS_NET="$MOCK_SYSFS_11" PIPEJACK_NETPLAN_DIR="$MOCK_NETPLAN_11" "$BOOTSTRAP_SCRIPT" --role vm1 --force --nat-iface ens33 --private-iface ens34 2>&1 || true)
+
+if echo "$APPLY_OUT" | grep -q "Network rollback completed" && \
+   [ -f "$APPLY_CONF" ] && \
+   [ "$(cat "$APPLY_CONF")" = "cloud-config-content" ] && \
+   [ ! -f "$MOCK_NETPLAN_11/01-pipejack-netcfg.yaml" ]; then
+    echo "  [OK] netplan apply failure triggered rollback and cleanly restored configuration."
+else
+    BOOTSTRAP_TEST_OK=0
+    echo "  [-] netplan apply failure rollback failed: $APPLY_OUT" >&2
+fi
+safe_delete_path "$MOCK_BIN_11"
+safe_delete_path "$MOCK_NETPLAN_11"
+safe_delete_path "$MOCK_SYSFS_11"
+
+# 12. Netplan try rejection triggers rollback (PIPEJACK_TEST_TRY=1)
+MOCK_SYSFS_12=""
+create_safe_tmp_dir MOCK_SYSFS_12 "/tmp/pipejack-mock-sysfs-XXXXXX" || { echo "[-] Failed to create mock sysfs dir" >&2; exit 1; }
+register_test_path "$MOCK_SYSFS_12"
+mkdir -p "$MOCK_SYSFS_12/ens33" "$MOCK_SYSFS_12/ens34"
+
+MOCK_NETPLAN_12=""
+create_safe_tmp_dir MOCK_NETPLAN_12 "/tmp/pipejack-mock-netplan-XXXXXX" || { echo "[-] Failed to create mock netplan dir" >&2; exit 1; }
+register_test_path "$MOCK_NETPLAN_12"
+
+MOCK_BIN_12=""
+create_safe_tmp_dir MOCK_BIN_12 "/tmp/pipejack-mock-bin-XXXXXX" || { echo "[-] Failed to create mock bin dir" >&2; exit 1; }
+register_test_path "$MOCK_BIN_12"
+
+cat << 'EOF' > "$MOCK_BIN_12/netplan"
+#!/usr/bin/env bash
+if [ "$1" = "try" ]; then
+    echo "mock netplan try rejected/timed out" >&2
+    exit 1
+fi
+exit 0
+EOF
+chmod +x "$MOCK_BIN_12/netplan"
+
+TRY_CONF="$MOCK_NETPLAN_12/00-net.yaml"
+echo "net-config-content" > "$TRY_CONF"
+
+TRY_OUT=$(PATH="$MOCK_BIN_12:$PATH" PIPEJACK_SYS_CLASS_NET="$MOCK_SYSFS_12" PIPEJACK_NETPLAN_DIR="$MOCK_NETPLAN_12" PIPEJACK_TEST_TRY=1 "$BOOTSTRAP_SCRIPT" --role vm1 --nat-iface ens33 --private-iface ens34 2>&1 || true)
+
+if echo "$TRY_OUT" | grep -q "Network rollback completed" && \
+   [ -f "$TRY_CONF" ] && \
+   [ "$(cat "$TRY_CONF")" = "net-config-content" ] && \
+   [ ! -f "$MOCK_NETPLAN_12/01-pipejack-netcfg.yaml" ]; then
+    echo "  [OK] netplan try rejection triggered rollback and restored configuration."
+else
+    BOOTSTRAP_TEST_OK=0
+    echo "  [-] netplan try rejection rollback failed: $TRY_OUT" >&2
+fi
+safe_delete_path "$MOCK_BIN_12"
+safe_delete_path "$MOCK_NETPLAN_12"
+safe_delete_path "$MOCK_SYSFS_12"
+
+# 13. Rapid repeated executions create distinct backups without collision and remain idempotent
+MOCK_SYSFS_13=""
+create_safe_tmp_dir MOCK_SYSFS_13 "/tmp/pipejack-mock-sysfs-XXXXXX" || { echo "[-] Failed to create mock sysfs dir" >&2; exit 1; }
+register_test_path "$MOCK_SYSFS_13"
+mkdir -p "$MOCK_SYSFS_13/ens33" "$MOCK_SYSFS_13/ens34"
+
+MOCK_NETPLAN_13=""
+create_safe_tmp_dir MOCK_NETPLAN_13 "/tmp/pipejack-mock-netplan-XXXXXX" || { echo "[-] Failed to create mock netplan dir" >&2; exit 1; }
+register_test_path "$MOCK_NETPLAN_13"
+
+MOCK_BIN_13=""
+create_safe_tmp_dir MOCK_BIN_13 "/tmp/pipejack-mock-bin-XXXXXX" || { echo "[-] Failed to create mock bin dir" >&2; exit 1; }
+register_test_path "$MOCK_BIN_13"
+
+cat << 'EOF' > "$MOCK_BIN_13/netplan"
 #!/usr/bin/env bash
 exit 0
 EOF
-chmod +x "$MOCK_IDEMP_BIN/netplan"
+chmod +x "$MOCK_BIN_13/netplan"
 
-PATH="$MOCK_IDEMP_BIN:$PATH" PIPEJACK_SYS_CLASS_NET="$MOCK_SYSFS_8" PIPEJACK_NETPLAN_DIR="$MOCK_IDEMP_DIR" "$BOOTSTRAP_SCRIPT" --role vm1 --force --nat-iface ens33 --private-iface ens34 >/dev/null 2>&1
-IDEMP_OUT2=$(PATH="$MOCK_IDEMP_BIN:$PATH" PIPEJACK_SYS_CLASS_NET="$MOCK_SYSFS_8" PIPEJACK_NETPLAN_DIR="$MOCK_IDEMP_DIR" "$BOOTSTRAP_SCRIPT" --role vm1 --force --nat-iface ens33 --private-iface ens34 2>&1 || true)
+echo "network: {version: 2}" > "$MOCK_NETPLAN_13/00-installer.yaml"
 
-IDEMP_DISABLED=$(find "$MOCK_IDEMP_DIR" -name "*.disabled" 2>/dev/null | wc -l)
-if [ -f "$MOCK_IDEMP_DIR/01-pipejack-netcfg.yaml" ] && [ "$IDEMP_DISABLED" -eq 0 ]; then
-    echo "  [OK] Repeated bootstrap execution is idempotent and leaves no orphaned .disabled files."
+PATH="$MOCK_BIN_13:$PATH" PIPEJACK_SYS_CLASS_NET="$MOCK_SYSFS_13" PIPEJACK_NETPLAN_DIR="$MOCK_NETPLAN_13" "$BOOTSTRAP_SCRIPT" --role vm1 --force --nat-iface ens33 --private-iface ens34 >/dev/null 2>&1
+PATH="$MOCK_BIN_13:$PATH" PIPEJACK_SYS_CLASS_NET="$MOCK_SYSFS_13" PIPEJACK_NETPLAN_DIR="$MOCK_NETPLAN_13" "$BOOTSTRAP_SCRIPT" --role vm1 --force --nat-iface ens33 --private-iface ens34 >/dev/null 2>&1
+PATH="$MOCK_BIN_13:$PATH" PIPEJACK_SYS_CLASS_NET="$MOCK_SYSFS_13" PIPEJACK_NETPLAN_DIR="$MOCK_NETPLAN_13" "$BOOTSTRAP_SCRIPT" --role vm1 --force --nat-iface ens33 --private-iface ens34 >/dev/null 2>&1
+
+BACKUP_DIRS_COUNT=$(find "$MOCK_NETPLAN_13" -maxdepth 1 -type d -name "pipejack-backup-*" 2>/dev/null | wc -l)
+LEFTOVER_DISABLED=$(find "$MOCK_NETPLAN_13" -name "*.disabled" 2>/dev/null | wc -l)
+
+if [ "$BACKUP_DIRS_COUNT" -eq 3 ] && [ "$LEFTOVER_DISABLED" -eq 1 ] && [ -f "$MOCK_NETPLAN_13/01-pipejack-netcfg.yaml" ]; then
+    echo "  [OK] Rapid repeated executions created 3 collision-free backup directories without accumulating duplicate .disabled files."
 else
     BOOTSTRAP_TEST_OK=0
-    echo "  [-] Repeated bootstrap execution failed or left orphaned files: $IDEMP_OUT2" >&2
+    echo "  [-] Rapid repeated executions failed: backup count=$BACKUP_DIRS_COUNT (expected 3), leftover disabled=$LEFTOVER_DISABLED" >&2
 fi
-safe_delete_path "$MOCK_IDEMP_BIN"
-safe_delete_path "$MOCK_IDEMP_DIR"
-safe_delete_path "$MOCK_SYSFS_8"
+safe_delete_path "$MOCK_BIN_13"
+safe_delete_path "$MOCK_NETPLAN_13"
+safe_delete_path "$MOCK_SYSFS_13"
 
 if [ $BOOTSTRAP_TEST_OK -eq 1 ]; then
     pass "Guest network bootstrapper passed isolated argument, ambiguity discovery rejection, rollback integrity, and idempotency tests"
@@ -3355,40 +3576,209 @@ EOF
     chmod +x "$MOCK_PWSH_DIR/scp"
     ln -sf "$MOCK_PWSH_DIR/scp" "$MOCK_PWSH_DIR/scp.exe"
 
-    # 5. Mock unhealthy VM2: hard health gate blocks VM1 and reports FAIL
-    GATE_FAIL_DIR=""
-    create_safe_tmp_dir GATE_FAIL_DIR "/tmp/pipejack-gate-fail-XXXXXX" || { echo "[-] Failed to create gate fail dir" >&2; exit 1; }
-    register_test_path "$GATE_FAIL_DIR"
+    # Start isolated lightweight Python HTTP mock server for fast and precise health probing
+    MOCK_SRV_PY="$MOCK_PWSH_DIR/mock_server.py"
+    PORT_FILE="$MOCK_PWSH_DIR/port.txt"
+    cat << 'EOF' > "$MOCK_SRV_PY"
+import http.server, socketserver, json, sys
 
-    gate_fail_ec=0
-    GATE_FAIL_OUT=$(PATH="$MOCK_PWSH_DIR:$PATH" PIPEJACK_MOCK_HEALTH="fail" pwsh -NoProfile -Command "
-        & '$FRESH_INSTALL_PS1' -NonInteractive -SkipPreflight -VM1_IP 127.0.0.1 -VM2_IP 127.0.0.2 -SSHPort 2222 -ReportDir '$GATE_FAIL_DIR'
-    " 2>&1) || gate_fail_ec=$?
+class MockHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/ci/500":
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(b"CI Internal Error")
+        elif self.path == "/ci/invalid_json":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b"<html>not json</html>")
+        elif self.path == "/ci/ok":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "ok"}).encode())
+        elif self.path == "/con/false":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"ci_healthy": False}).encode())
+        elif self.path == "/con/ok":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"ci_healthy": True}).encode())
+        elif self.path == "/v2/":
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"{}")
+        elif self.path == "/reg/404":
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b"Registry Not Found")
+        elif self.path == "/reg/500":
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(b"Registry Internal Error")
+        else:
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b"Not Found")
+    def log_message(self, format, *args):
+        pass
 
-    # Find the summary report in GATE_FAIL_DIR
-    GATE_FAIL_SUMMARY=$(find "$GATE_FAIL_DIR" -name "*-summary.txt" 2>/dev/null | head -1)
+class ReusableTCPServer(socketserver.TCPServer):
+    allow_reuse_address = True
 
-    if [ $gate_fail_ec -eq 1 ] && \
-       echo "$GATE_FAIL_OUT" | grep -q "HARD DEPLOYMENT GATE FAILED" && \
-       echo "$GATE_FAIL_OUT" | grep -q "Deploying VM1 is BLOCKED" && \
-       [ -n "$GATE_FAIL_SUMMARY" ] && \
-       grep -q "VM1 Client Deployment:     NOT EXECUTED" "$GATE_FAIL_SUMMARY" && \
-       grep -q "End-to-End Verification:   NOT EXECUTED" "$GATE_FAIL_SUMMARY" && \
-       grep -q "Overall Deployment Verdict:     FAIL" "$GATE_FAIL_SUMMARY"; then
-        echo "  [OK] Mock unhealthy VM2 correctly triggered hard health gate, blocked VM1 deployment, and produced accurate FAIL/NOT EXECUTED summary."
-    else
+server = ReusableTCPServer(('127.0.0.1', 0), MockHandler)
+with open(sys.argv[1], 'w') as f:
+    f.write(str(server.server_address[1]))
+server.serve_forever()
+EOF
+    python3 "$MOCK_SRV_PY" "$PORT_FILE" &
+    SRV_PID=$!
+    for attempt in $(seq 1 30); do
+        if [ -s "$PORT_FILE" ]; then break; fi
+        sleep 0.1
+    done
+    MOCK_PORT=$(cat "$PORT_FILE" 2>/dev/null || echo "")
+
+    if [ -z "$MOCK_PORT" ]; then
         ONBOARDING_TEST_OK=0
-        echo "  [-] Mock unhealthy VM2 failed to enforce hard health gate (ec: $gate_fail_ec): $GATE_FAIL_OUT" >&2
+        echo "  [-] Failed to start mock health HTTP server." >&2
     fi
 
-    # 6. Mock healthy VM2: permits VM1 deployment and marks phases PASS
+    # 5. CI HTTP 500 error triggers hard gate, blocks VM1, and reports FAIL
+    GATE_CI500_DIR=""
+    create_safe_tmp_dir GATE_CI500_DIR "/tmp/pipejack-gate-ci500-XXXXXX" || { echo "[-] Failed to create safe dir" >&2; exit 1; }
+    register_test_path "$GATE_CI500_DIR"
+
+    ci500_ec=0
+    CI500_OUT=$(PATH="$MOCK_PWSH_DIR:$PATH" PIPEJACK_HEALTH_RETRIES=1 PIPEJACK_HEALTH_DELAY=0 pwsh -NoProfile -Command "
+        & '$FRESH_INSTALL_PS1' -NonInteractive -SkipPreflight -VM1_IP 127.0.0.1 -VM2_IP 127.0.0.2 -SSHPort 2222 -ReportDir '$GATE_CI500_DIR' \
+            -CIHealthUrl 'http://127.0.0.1:$MOCK_PORT/ci/500' -ConsoleStatusUrl 'http://127.0.0.1:$MOCK_PORT/con/ok' -RegistryHealthUrl 'http://127.0.0.1:$MOCK_PORT/v2/'
+    " 2>&1) || ci500_ec=$?
+
+    CI500_SUMMARY=$(find "$GATE_CI500_DIR" -name "*-summary.txt" 2>/dev/null | head -1)
+
+    if [ $ci500_ec -eq 1 ] && \
+       echo "$CI500_OUT" | grep -q "HARD DEPLOYMENT GATE FAILED" && \
+       echo "$CI500_OUT" | grep -q "Deploying VM1 is BLOCKED" && \
+       [ -n "$CI500_SUMMARY" ] && \
+       grep -q "CI Orchestrator (:8888): FAIL" "$CI500_SUMMARY" && \
+       grep -q "VM1 Client Deployment:     NOT EXECUTED" "$CI500_SUMMARY" && \
+       grep -q "Overall Deployment Verdict:     FAIL" "$CI500_SUMMARY"; then
+        echo "  [OK] CI HTTP 500 error triggered hard health gate, blocked VM1, and produced accurate FAIL/NOT EXECUTED summary."
+    else
+        ONBOARDING_TEST_OK=0
+        echo "  [-] CI HTTP 500 health check failed to trigger hard gate (ec: $ci500_ec): $CI500_OUT" >&2
+    fi
+    safe_delete_path "$GATE_CI500_DIR"
+
+    # 6. CI invalid JSON triggers hard gate and blocks VM1
+    GATE_JSON_DIR=""
+    create_safe_tmp_dir GATE_JSON_DIR "/tmp/pipejack-gate-json-XXXXXX" || { echo "[-] Failed to create safe dir" >&2; exit 1; }
+    register_test_path "$GATE_JSON_DIR"
+
+    json_ec=0
+    JSON_OUT=$(PATH="$MOCK_PWSH_DIR:$PATH" PIPEJACK_HEALTH_RETRIES=1 PIPEJACK_HEALTH_DELAY=0 pwsh -NoProfile -Command "
+        & '$FRESH_INSTALL_PS1' -NonInteractive -SkipPreflight -VM1_IP 127.0.0.1 -VM2_IP 127.0.0.2 -SSHPort 2222 -ReportDir '$GATE_JSON_DIR' \
+            -CIHealthUrl 'http://127.0.0.1:$MOCK_PORT/ci/invalid_json' -ConsoleStatusUrl 'http://127.0.0.1:$MOCK_PORT/con/ok' -RegistryHealthUrl 'http://127.0.0.1:$MOCK_PORT/v2/'
+    " 2>&1) || json_ec=$?
+
+    JSON_SUMMARY=$(find "$GATE_JSON_DIR" -name "*-summary.txt" 2>/dev/null | head -1)
+
+    if [ $json_ec -eq 1 ] && \
+       echo "$JSON_OUT" | grep -q "HARD DEPLOYMENT GATE FAILED" && \
+       [ -n "$JSON_SUMMARY" ] && \
+       grep -q "CI Orchestrator (:8888): FAIL" "$JSON_SUMMARY" && \
+       grep -q "VM1 Client Deployment:     NOT EXECUTED" "$JSON_SUMMARY"; then
+        echo "  [OK] CI invalid JSON response correctly triggered hard health gate and blocked VM1."
+    else
+        ONBOARDING_TEST_OK=0
+        echo "  [-] CI invalid JSON check failed to enforce gate (ec: $json_ec): $JSON_OUT" >&2
+    fi
+    safe_delete_path "$GATE_JSON_DIR"
+
+    # 7. Demo Console ci_healthy: false triggers hard gate and blocks VM1
+    GATE_CON_DIR=""
+    create_safe_tmp_dir GATE_CON_DIR "/tmp/pipejack-gate-con-XXXXXX" || { echo "[-] Failed to create safe dir" >&2; exit 1; }
+    register_test_path "$GATE_CON_DIR"
+
+    con_ec=0
+    CON_OUT=$(PATH="$MOCK_PWSH_DIR:$PATH" PIPEJACK_HEALTH_RETRIES=1 PIPEJACK_HEALTH_DELAY=0 pwsh -NoProfile -Command "
+        & '$FRESH_INSTALL_PS1' -NonInteractive -SkipPreflight -VM1_IP 127.0.0.1 -VM2_IP 127.0.0.2 -SSHPort 2222 -ReportDir '$GATE_CON_DIR' \
+            -CIHealthUrl 'http://127.0.0.1:$MOCK_PORT/ci/ok' -ConsoleStatusUrl 'http://127.0.0.1:$MOCK_PORT/con/false' -RegistryHealthUrl 'http://127.0.0.1:$MOCK_PORT/v2/'
+    " 2>&1) || con_ec=$?
+
+    CON_SUMMARY=$(find "$GATE_CON_DIR" -name "*-summary.txt" 2>/dev/null | head -1)
+
+    if [ $con_ec -eq 1 ] && \
+       echo "$CON_OUT" | grep -q "HARD DEPLOYMENT GATE FAILED" && \
+       [ -n "$CON_SUMMARY" ] && \
+       grep -q "Demo Console (:8090):    FAIL" "$CON_SUMMARY" && \
+       grep -q "VM1 Client Deployment:     NOT EXECUTED" "$CON_SUMMARY"; then
+        echo "  [OK] Demo Console ci_healthy: false correctly triggered hard health gate and blocked VM1."
+    else
+        ONBOARDING_TEST_OK=0
+        echo "  [-] Demo Console ci_healthy: false failed to enforce gate (ec: $con_ec): $CON_OUT" >&2
+    fi
+    safe_delete_path "$GATE_CON_DIR"
+
+    # 8. Registry HTTP 404 fallback triggers hard gate and blocks VM1
+    GATE_REG_DIR=""
+    create_safe_tmp_dir GATE_REG_DIR "/tmp/pipejack-gate-reg-XXXXXX" || { echo "[-] Failed to create safe dir" >&2; exit 1; }
+    register_test_path "$GATE_REG_DIR"
+
+    reg_ec=0
+    REG_OUT=$(PATH="$MOCK_PWSH_DIR:$PATH" PIPEJACK_HEALTH_RETRIES=1 PIPEJACK_HEALTH_DELAY=0 pwsh -NoProfile -Command "
+        & '$FRESH_INSTALL_PS1' -NonInteractive -SkipPreflight -VM1_IP 127.0.0.1 -VM2_IP 127.0.0.2 -SSHPort 2222 -ReportDir '$GATE_REG_DIR' \
+            -CIHealthUrl 'http://127.0.0.1:$MOCK_PORT/ci/ok' -ConsoleStatusUrl 'http://127.0.0.1:$MOCK_PORT/con/ok' -RegistryHealthUrl 'http://127.0.0.1:$MOCK_PORT/reg/404'
+    " 2>&1) || reg_ec=$?
+
+    REG_SUMMARY=$(find "$GATE_REG_DIR" -name "*-summary.txt" 2>/dev/null | head -1)
+
+    if [ $reg_ec -eq 1 ] && \
+       echo "$REG_OUT" | grep -q "HARD DEPLOYMENT GATE FAILED" && \
+       [ -n "$REG_SUMMARY" ] && \
+       grep -q "Local Registry (:5000):  FAIL" "$REG_SUMMARY" && \
+       grep -q "VM1 Client Deployment:     NOT EXECUTED" "$REG_SUMMARY"; then
+        echo "  [OK] Registry HTTP 404 response correctly triggered hard health gate and blocked VM1."
+    else
+        ONBOARDING_TEST_OK=0
+        echo "  [-] Registry HTTP 404 failed to enforce gate (ec: $reg_ec): $REG_OUT" >&2
+    fi
+    safe_delete_path "$GATE_REG_DIR"
+
+    # 9. Inherited PIPEJACK_MOCK_HEALTH=pass does NOT bypass health checks
+    GATE_BYPASS_DIR=""
+    create_safe_tmp_dir GATE_BYPASS_DIR "/tmp/pipejack-gate-bypass-XXXXXX" || { echo "[-] Failed to create safe dir" >&2; exit 1; }
+    register_test_path "$GATE_BYPASS_DIR"
+
+    bypass_ec=0
+    BYPASS_OUT=$(PATH="$MOCK_PWSH_DIR:$PATH" PIPEJACK_MOCK_HEALTH="pass" PIPEJACK_HEALTH_RETRIES=1 PIPEJACK_HEALTH_DELAY=0 pwsh -NoProfile -Command "
+        & '$FRESH_INSTALL_PS1' -NonInteractive -SkipPreflight -VM1_IP 127.0.0.1 -VM2_IP 127.0.0.2 -SSHPort 2222 -ReportDir '$GATE_BYPASS_DIR' \
+            -CIHealthUrl 'http://127.0.0.1:$MOCK_PORT/ci/500' -ConsoleStatusUrl 'http://127.0.0.1:$MOCK_PORT/con/ok' -RegistryHealthUrl 'http://127.0.0.1:$MOCK_PORT/v2/'
+    " 2>&1) || bypass_ec=$?
+
+    if [ $bypass_ec -eq 1 ] && \
+       echo "$BYPASS_OUT" | grep -q "HARD DEPLOYMENT GATE FAILED"; then
+        echo "  [OK] Inherited PIPEJACK_MOCK_HEALTH=pass did not bypass real endpoint health gate."
+    else
+        ONBOARDING_TEST_OK=0
+        echo "  [-] Inherited PIPEJACK_MOCK_HEALTH=pass incorrectly bypassed real checks (ec: $bypass_ec): $BYPASS_OUT" >&2
+    fi
+    safe_delete_path "$GATE_BYPASS_DIR"
+
+    # 10. Healthy VM2: permits VM1 deployment and marks phases PASS
     GATE_PASS_DIR=""
     create_safe_tmp_dir GATE_PASS_DIR "/tmp/pipejack-gate-pass-XXXXXX" || { echo "[-] Failed to create gate pass dir" >&2; exit 1; }
     register_test_path "$GATE_PASS_DIR"
 
     gate_pass_ec=0
-    GATE_PASS_OUT=$(PATH="$MOCK_PWSH_DIR:$PATH" PIPEJACK_MOCK_HEALTH="pass" pwsh -NoProfile -Command "
-        & '$FRESH_INSTALL_PS1' -NonInteractive -SkipPreflight -SkipVerify -VM1_IP 127.0.0.1 -VM2_IP 127.0.0.2 -SSHPort 2222 -ReportDir '$GATE_PASS_DIR'
+    GATE_PASS_OUT=$(PATH="$MOCK_PWSH_DIR:$PATH" PIPEJACK_HEALTH_RETRIES=2 PIPEJACK_HEALTH_DELAY=0 pwsh -NoProfile -Command "
+        & '$FRESH_INSTALL_PS1' -NonInteractive -SkipPreflight -SkipVerify -VM1_IP 127.0.0.1 -VM2_IP 127.0.0.2 -SSHPort 2222 -ReportDir '$GATE_PASS_DIR' \
+            -CIHealthUrl 'http://127.0.0.1:$MOCK_PORT/ci/ok' -ConsoleStatusUrl 'http://127.0.0.1:$MOCK_PORT/con/ok' -RegistryHealthUrl 'http://127.0.0.1:$MOCK_PORT/v2/'
     " 2>&1) || gate_pass_ec=$?
 
     GATE_PASS_SUMMARY=$(find "$GATE_PASS_DIR" -name "*-summary.txt" 2>/dev/null | head -1)
@@ -3398,15 +3788,22 @@ EOF
        echo "$GATE_PASS_OUT" | grep -q "Step 4/5: Deploying VM1 Workload Client" && \
        [ -n "$GATE_PASS_SUMMARY" ] && \
        grep -q "CI Orchestrator (:8888): PASS" "$GATE_PASS_SUMMARY" && \
+       grep -q "Demo Console (:8090):    PASS" "$GATE_PASS_SUMMARY" && \
+       grep -q "Local Registry (:5000):  PASS" "$GATE_PASS_SUMMARY" && \
        grep -q "VM1 Client Deployment:     PASS" "$GATE_PASS_SUMMARY" && \
        grep -q "Overall Deployment Verdict:     PASS" "$GATE_PASS_SUMMARY"; then
-        echo "  [OK] Mock healthy VM2 permitted VM1 deployment and produced accurate PASS summary."
+        echo "  [OK] Healthy VM2 permitted VM1 deployment and produced accurate PASS summary."
     else
         ONBOARDING_TEST_OK=0
-        echo "  [-] Mock healthy VM2 failed deployment flow (ec: $gate_pass_ec): $GATE_PASS_OUT" >&2
+        echo "  [-] Healthy VM2 failed deployment flow (ec: $gate_pass_ec): $GATE_PASS_OUT" >&2
     fi
 
-    safe_delete_path "$GATE_FAIL_DIR"
+    # Terminate mock HTTP server
+    if [ -n "$SRV_PID" ]; then
+        kill "$SRV_PID" 2>/dev/null || true
+        wait "$SRV_PID" 2>/dev/null || true
+    fi
+
     safe_delete_path "$GATE_PASS_DIR"
     safe_delete_path "$MOCK_PWSH_DIR"
     safe_delete_path "$TEST_REPORT_DIR"
@@ -3421,7 +3818,7 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# Test 15: Final Host /tmp Namespace Preservation Verification
+# Test 16: Final Host /tmp Namespace Preservation Verification
 # -----------------------------------------------------------------------------
 section "Final Host /tmp Namespace Preservation Verification"
 FINAL_CANARY_OK=1

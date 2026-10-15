@@ -255,24 +255,65 @@ if [ "$PRIVATE_IFACE" = "$NAT_IFACE" ]; then
     exit 1
 fi
 
+ipv4_to_int() {
+    local ip="$1"
+    local a b c d
+    IFS='.' read -r a b c d <<< "$ip"
+    echo $(( (a << 24) | (b << 16) | (c << 8) | d ))
+}
+
+cidr_to_netmask() {
+    local prefix="$1"
+    if [ "$prefix" -eq 0 ]; then
+        echo 0
+    else
+        echo $(( ((0xFFFFFFFF << (32 - prefix)) & 0xFFFFFFFF) ))
+    fi
+}
+
+check_cidr_overlap() {
+    local ip1="$1" prefix1="$2"
+    local ip2="$3" prefix2="$4"
+
+    local int1 int2 mask1 min_prefix min_mask
+    int1=$(ipv4_to_int "$ip1")
+    int2=$(ipv4_to_int "$ip2")
+
+    if [ "$prefix1" -le "$prefix2" ]; then
+        min_prefix="$prefix1"
+    else
+        min_prefix="$prefix2"
+    fi
+    min_mask=$(cidr_to_netmask "$min_prefix")
+
+    if [ $(( (int1 & min_mask) == (int2 & min_mask) )) -eq 1 ]; then
+        return 0 # Overlap detected
+    else
+        return 1 # No overlap
+    fi
+}
+
 # 3. Check for Subnet Conflicts
 echo
 echo "[+] Step 2: Validating Subnet Topology and Conflict Avoidance..."
 
 if command -v ip >/dev/null 2>&1; then
-    NAT_CURRENT_IP="$(ip -4 addr show "$NAT_IFACE" 2>/dev/null | awk '/inet / {print $2; exit}' || echo "")"
-    if [ -n "$NAT_CURRENT_IP" ]; then
-        echo "  Current NAT interface IP: $NAT_CURRENT_IP"
-        if [[ "$NAT_CURRENT_IP" == 192.168.88.* ]]; then
+    NAT_CURRENT_ADDR="$(ip -4 addr show "$NAT_IFACE" 2>/dev/null | awk '/inet / {print $2; exit}' || echo "")"
+    if [ -n "$NAT_CURRENT_ADDR" ]; then
+        NAT_CURRENT_IP="${NAT_CURRENT_ADDR%/*}"
+        NAT_CURRENT_CIDR="${NAT_CURRENT_ADDR#*/}"
+        [ "$NAT_CURRENT_CIDR" = "$NAT_CURRENT_ADDR" ] && NAT_CURRENT_CIDR="24"
+        echo "  Current NAT interface address: $NAT_CURRENT_ADDR"
+        if check_cidr_overlap "$PRIVATE_IP" "$SUBNET_CIDR" "$NAT_CURRENT_IP" "$NAT_CURRENT_CIDR"; then
             echo "[-] ERROR: Subnet conflict detected!" >&2
-            echo "    NAT interface '$NAT_IFACE' is on the 192.168.88.0/24 subnet ($NAT_CURRENT_IP)." >&2
-            echo "    The private inter-VM lab requires exclusive use of 192.168.88.0/24." >&2
+            echo "    NAT interface '$NAT_IFACE' ($NAT_CURRENT_ADDR) overlaps with private lab subnet ($PRIVATE_IP/$SUBNET_CIDR)." >&2
+            echo "    The private inter-VM lab requires exclusive use of $PRIVATE_IP/$SUBNET_CIDR without route overlap." >&2
             echo "    Remediation: In VMware Virtual Network Editor, change your NAT subnet to 192.168.152.0/24 or another non-conflicting range." >&2
             exit 1
         fi
     fi
 fi
-echo "  [OK] Private subnet ($PRIVATE_SUBNET) is distinct from external/NAT routes."
+echo "  [OK] Private subnet ($PRIVATE_IP/$SUBNET_CIDR) is distinct from external/NAT routes."
 
 # 4. Generate Clean Netplan Configuration
 echo
@@ -307,7 +348,9 @@ fi
 
 # 5. Interactive Confirmation (without --force)
 if [ "$FORCE" -eq 0 ]; then
-    if [ -t 0 ]; then
+    if [ "${PIPEJACK_TEST_TRY:-0}" -eq 1 ]; then
+        echo "  [TEST] Bypassing confirmation prompt for netplan try testing (PIPEJACK_TEST_TRY=1)."
+    elif [ -t 0 ]; then
         echo
         read -r -p "Apply these network changes to this virtual machine? [y/N]: " CONFIRM_APPLY
         if [[ ! "$CONFIRM_APPLY" =~ ^[Yy]$ ]]; then
@@ -326,21 +369,33 @@ echo
 echo "[+] Step 4: Backing Up Existing Netplan Files..."
 
 mkdir -p "$NETPLAN_DIR"
-BACKUP_DIR="$NETPLAN_DIR/pipejack-backup-$(date +%Y%m%d%H%M%S)"
-mkdir -p -m 0700 "$BACKUP_DIR"
+BACKUP_DIR=$(mktemp -d -p "$NETPLAN_DIR" "pipejack-backup-$(date +%Y%m%d%H%M%S)-XXXXXX" 2>/dev/null || true)
+if [ -z "$BACKUP_DIR" ] || [ ! -d "$BACKUP_DIR" ]; then
+    BACKUP_DIR="$NETPLAN_DIR/pipejack-backup-$(date +%Y%m%d%H%M%S%N)-$$"
+    mkdir -p -m 0700 "$BACKUP_DIR"
+fi
+chmod 0700 "$BACKUP_DIR"
 ORIGINAL_RECORD="$BACKUP_DIR/original_files.txt"
-touch "$ORIGINAL_RECORD"
+RENAMED_RECORD="$BACKUP_DIR/renamed_by_this_run.txt"
+touch "$ORIGINAL_RECORD" "$RENAMED_RECORD"
 
-# Snapshot existing yaml files (excluding our own generated file from previous runs)
+# Snapshot existing yaml files (including pre-existing 01-pipejack-netcfg.yaml)
+PRE_EXISTING_NETPLAN_FILE=0
+if [ -f "$NETPLAN_FILE" ]; then
+    PRE_EXISTING_NETPLAN_FILE=1
+    cp -p "$NETPLAN_FILE" "$BACKUP_DIR/01-pipejack-netcfg.yaml.prerun"
+    echo "$NETPLAN_FILE" >> "$ORIGINAL_RECORD"
+    echo "  Backed up pre-existing PipeJack configuration: $NETPLAN_FILE"
+fi
+
 shopt -s nullglob
 EXISTING_YAMLS=("$NETPLAN_DIR"/*.yaml)
 shopt -u nullglob
 
 for yf in "${EXISTING_YAMLS[@]}"; do
     [ -f "$yf" ] || continue
-    # Do not backup our own generated file into the archive
     if [ "$yf" != "$NETPLAN_FILE" ]; then
-        cp -a "$yf" "$BACKUP_DIR/"
+        cp -p "$yf" "$BACKUP_DIR/$(basename "$yf")"
         echo "$yf" >> "$ORIGINAL_RECORD"
         echo "  Backed up: $yf -> $BACKUP_DIR/$(basename "$yf")"
     fi
@@ -350,48 +405,54 @@ echo "  [OK] Netplan backup preserved in: $BACKUP_DIR"
 
 # Restoration function for failure rollback
 restore_network_state() {
+    local rollback_failed=0
     echo
     echo "[-] FAILURE DETECTED: Initiating full network configuration rollback..." >&2
 
-    # 1. Remove the written PipeJack Netplan file
-    rm -f "$NETPLAN_FILE"
-
-    # 2. Restore all backed up files to original names and permissions
-    if [ -f "$ORIGINAL_RECORD" ]; then
-        while IFS= read -r orig_file; do
-            [ -n "$orig_file" ] || continue
-            base_name="$(basename "$orig_file")"
-            if [ -f "$BACKUP_DIR/$base_name" ]; then
-                cp -a "$BACKUP_DIR/$base_name" "$orig_file"
-                echo "  Restored: $orig_file" >&2
-            fi
-            # Remove any disabled files created during this run
-            rm -f "${orig_file}.disabled"
-        done < "$ORIGINAL_RECORD"
+    # 1. Restore or remove NETPLAN_FILE
+    if [ "$PRE_EXISTING_NETPLAN_FILE" -eq 1 ] && [ -f "$BACKUP_DIR/01-pipejack-netcfg.yaml.prerun" ]; then
+        echo "  Restoring pre-existing PipeJack configuration: $NETPLAN_FILE" >&2
+        cp -p "$BACKUP_DIR/01-pipejack-netcfg.yaml.prerun" "$NETPLAN_FILE" || rollback_failed=1
+    else
+        rm -f "$NETPLAN_FILE"
     fi
 
-    # 3. Clean any orphaned .disabled files
-    shopt -s nullglob
-    for df in "$NETPLAN_DIR"/*.yaml.disabled; do
-        [ -f "$df" ] || continue
-        orig="${df%.disabled}"
-        if [ ! -f "$orig" ]; then
-            mv "$df" "$orig"
-            echo "  Re-enabled: $orig" >&2
-        else
-            rm -f "$df"
-        fi
-    done
-    shopt -u nullglob
+    # 2. Restore files renamed to .disabled by THIS execution ONLY
+    if [ -f "$RENAMED_RECORD" ]; then
+        while IFS= read -r dis_file; do
+            [ -n "$dis_file" ] || continue
+            orig_file="${dis_file%.disabled}"
+            base_name="$(basename "$orig_file")"
+            if [ -f "$dis_file" ]; then
+                if [ -f "$BACKUP_DIR/$base_name" ]; then
+                    cp -p "$BACKUP_DIR/$base_name" "$orig_file" || rollback_failed=1
+                    rm -f "$dis_file"
+                    echo "  Restored: $orig_file" >&2
+                else
+                    mv "$dis_file" "$orig_file" || rollback_failed=1
+                    echo "  Re-enabled: $orig_file" >&2
+                fi
+            fi
+        done < "$RENAMED_RECORD"
+    fi
 
-    # 4. Re-apply previous configuration if netplan is present
+    # 3. Explicitly re-apply runtime network state with netplan if available
     if command -v netplan >/dev/null 2>&1; then
         echo "  Re-applying original network state with netplan..." >&2
-        netplan generate >/dev/null 2>&1 || true
-        netplan apply >/dev/null 2>&1 || true
+        if ! netplan generate 2>&1; then
+            echo "[-] WARNING: netplan generate failed during rollback." >&2
+            rollback_failed=1
+        elif ! netplan apply 2>&1; then
+            echo "[-] WARNING: netplan apply failed during rollback." >&2
+            rollback_failed=1
+        fi
     fi
 
-    echo "[-] Network rollback completed. Previous configuration restored." >&2
+    if [ "$rollback_failed" -eq 0 ]; then
+        echo "[-] Network rollback completed. Previous configuration restored." >&2
+    else
+        echo "[-] ERROR: Network rollback encountered errors during restoration. Runtime recovery could not be fully guaranteed." >&2
+    fi
     echo "[-] Manual recovery directory available at: $BACKUP_DIR" >&2
 }
 
@@ -405,6 +466,7 @@ for yf in "${EXISTING_YAMLS[@]}"; do
     if [ "$yf" != "$NETPLAN_FILE" ]; then
         echo "  Deactivating previous configuration: $yf -> ${yf}.disabled"
         mv "$yf" "${yf}.disabled"
+        echo "${yf}.disabled" >> "$RENAMED_RECORD"
     fi
 done
 
@@ -425,8 +487,8 @@ if command -v netplan >/dev/null 2>&1; then
     # 8. Apply or Try Configuration
     if [ "$SKIP_APPLY" -eq 0 ]; then
         echo
-        # Use netplan try when interactive on the console without --force
-        if [ -t 0 ] && [ "$FORCE" -eq 0 ]; then
+        # Use netplan try when interactive on the console without --force (or in automated testing)
+        if { [ -t 0 ] || [ "${PIPEJACK_TEST_TRY:-0}" -eq 1 ]; } && [ "$FORCE" -eq 0 ]; then
             echo "[+] Step 6: Testing Network Configuration with automatic rollback (netplan try)..."
             echo "    Press ENTER within 30 seconds to confirm and keep the new settings."
             if ! netplan try --timeout 30; then

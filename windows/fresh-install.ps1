@@ -75,7 +75,11 @@ param(
     [switch]$SkipVM2,
     [switch]$SkipPreflight,
     [switch]$SkipVerify,
-    [string]$ReportDir = ""
+    [string]$ReportDir = "",
+    [string]$CIHealthUrl = "",
+    [string]$ConsoleStatusUrl = "",
+    [string]$RegistryHealthUrl = "",
+    [scriptblock]$CustomHealthProbe = $null
 )
 
 $ErrorActionPreference = "Stop"
@@ -107,6 +111,111 @@ function Test-ValidIPv4 {
     $parsedIP = $null
     if ([System.Net.IPAddress]::TryParse($IPString.Trim(), [ref]$parsedIP)) {
         return ($parsedIP.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork)
+    }
+    return $false
+}
+
+function Test-VM2-CIHealth {
+    param(
+        [string]$Url,
+        [int]$TimeoutSec = 3
+    )
+    # 1. Primary probe: Invoke-RestMethod
+    try {
+        $resp = Invoke-RestMethod -Uri $Url -Method Get -TimeoutSec $TimeoutSec -UseBasicParsing -ErrorAction Stop
+        if ($resp -and ($resp.status -eq "ok" -or ($resp -is [hashtable] -and $resp["status"] -eq "ok"))) {
+            return $true
+        }
+    } catch {
+        # Fall back to curl.exe if available
+    }
+
+    # 2. Fallback probe: curl.exe with explicit HTTP status and JSON validation
+    if (Get-Command "curl.exe" -ErrorAction SilentlyContinue) {
+        try {
+            $raw = & curl.exe -s -S --connect-timeout $TimeoutSec -m $TimeoutSec -w "`n%{http_code}" $Url 2>$null
+            if ($raw) {
+                $lines = $raw -split "`r?`n"
+                $httpCode = $lines[-1].Trim()
+                if ($httpCode -eq "200") {
+                    $bodyLines = $lines[0..($lines.Length - 2)]
+                    $body = ($bodyLines -join "`n").Trim()
+                    if ($body) {
+                        $parsed = ConvertFrom-Json $body -ErrorAction Stop
+                        if ($parsed -and ($parsed.status -eq "ok" -or ($parsed -is [hashtable] -and $parsed["status"] -eq "ok"))) {
+                            return $true
+                        }
+                    }
+                }
+            }
+        } catch {}
+    }
+    return $false
+}
+
+function Test-VM2-ConsoleHealth {
+    param(
+        [string]$Url,
+        [int]$TimeoutSec = 3
+    )
+    # 1. Primary probe: Invoke-RestMethod
+    try {
+        $resp = Invoke-RestMethod -Uri $Url -Method Get -TimeoutSec $TimeoutSec -UseBasicParsing -ErrorAction Stop
+        if ($resp -and ($resp.ci_healthy -eq $true -or ($resp -is [hashtable] -and $resp["ci_healthy"] -eq $true))) {
+            return $true
+        }
+    } catch {
+        # Fall back to curl.exe if available
+    }
+
+    # 2. Fallback probe: curl.exe with explicit HTTP status and JSON validation
+    if (Get-Command "curl.exe" -ErrorAction SilentlyContinue) {
+        try {
+            $raw = & curl.exe -s -S --connect-timeout $TimeoutSec -m $TimeoutSec -w "`n%{http_code}" $Url 2>$null
+            if ($raw) {
+                $lines = $raw -split "`r?`n"
+                $httpCode = $lines[-1].Trim()
+                if ($httpCode -eq "200") {
+                    $bodyLines = $lines[0..($lines.Length - 2)]
+                    $body = ($bodyLines -join "`n").Trim()
+                    if ($body) {
+                        $parsed = ConvertFrom-Json $body -ErrorAction Stop
+                        if ($parsed -and ($parsed.ci_healthy -eq $true -or ($parsed -is [hashtable] -and $parsed["ci_healthy"] -eq $true))) {
+                            return $true
+                        }
+                    }
+                }
+            }
+        } catch {}
+    }
+    return $false
+}
+
+function Test-VM2-RegistryHealth {
+    param(
+        [string]$Url,
+        [int]$TimeoutSec = 3
+    )
+    # 1. Primary probe: Invoke-WebRequest
+    try {
+        $resp = Invoke-WebRequest -Uri $Url -Method Get -TimeoutSec $TimeoutSec -UseBasicParsing -ErrorAction Stop
+        if ($resp.StatusCode -eq 200) {
+            return $true
+        }
+    } catch {
+        if ($_.Exception.Response -and $_.Exception.Response.StatusCode.value__ -eq 200) {
+            return $true
+        }
+    }
+
+    # 2. Fallback probe: curl.exe with explicit HTTP status code check
+    if (Get-Command "curl.exe" -ErrorAction SilentlyContinue) {
+        try {
+            $raw = & curl.exe -s -S --connect-timeout $TimeoutSec -m $TimeoutSec -o $null -w "%{http_code}" $Url 2>$null
+            if ($raw -and $raw.Trim() -eq "200") {
+                return $true
+            }
+        } catch {}
     }
     return $false
 }
@@ -528,64 +637,34 @@ if (-not $SkipVM2) {
         $conHealthy = $false
         $regHealthy = $false
 
-        if ($env:PIPEJACK_MOCK_HEALTH -eq "pass") {
-            $ciHealthy = $true
-            $conHealthy = $true
-            $regHealthy = $true
-            Write-Host " [MOCK ONLINE: CI=OK, Console=OK, Registry=OK]" -ForegroundColor Green
-        } elseif ($env:PIPEJACK_MOCK_HEALTH -eq "fail") {
-            $ciHealthy = $false
-            $conHealthy = $false
-            $regHealthy = $false
-            Write-Host " [MOCK FAILED: CI=FAIL, Console=FAIL, Registry=FAIL]" -ForegroundColor Yellow
-        } else {
-            for ($i = 1; $i -le $maxRetries; $i++) {
-                Write-Host "  Health probe attempt $i/$maxRetries..." -NoNewline
+        $ciTargetUrl  = if ($CIHealthUrl) { $CIHealthUrl } else { "http://${VM2_IP}:8888/health" }
+        $conTargetUrl = if ($ConsoleStatusUrl) { $ConsoleStatusUrl } else { "http://${VM2_IP}:8090/api/status" }
+        $regTargetUrl = if ($RegistryHealthUrl) { $RegistryHealthUrl } else { "http://${VM2_IP}:5000/v2/" }
 
+        for ($i = 1; $i -le $maxRetries; $i++) {
+            Write-Host "  Health probe attempt $i/$maxRetries..." -NoNewline
+
+            if ($CustomHealthProbe) {
+                $probeResult = & $CustomHealthProbe
+                if ($probeResult -is [hashtable]) {
+                    if ($probeResult.ContainsKey("CI")) { $ciHealthy = [bool]$probeResult["CI"] }
+                    if ($probeResult.ContainsKey("Console")) { $conHealthy = [bool]$probeResult["Console"] }
+                    if ($probeResult.ContainsKey("Registry")) { $regHealthy = [bool]$probeResult["Registry"] }
+                }
+            } else {
                 # 1. Probe CI Orchestrator (:8888)
                 if (-not $ciHealthy) {
-                try {
-                    $ciResp = Invoke-RestMethod -Uri "http://${VM2_IP}:8888/health" -Method Get -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop
-                    if ($ciResp -and $ciResp.status -eq "ok") {
-                        $ciHealthy = $true
-                    }
-                } catch {
-                    if (Get-Command "curl.exe" -ErrorAction SilentlyContinue) {
-                        $cOut = & curl.exe -s -m 3 "http://${VM2_IP}:8888/health" 2>$null
-                        if ($cOut -match '"status"\s*:\s*"ok"') { $ciHealthy = $true }
-                    }
+                    $ciHealthy = Test-VM2-CIHealth -Url $ciTargetUrl -TimeoutSec 3
                 }
-            }
 
-            # 2. Probe Demo Console (:8090)
-            if (-not $conHealthy) {
-                try {
-                    $conResp = Invoke-RestMethod -Uri "http://${VM2_IP}:8090/api/status" -Method Get -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop
-                    if ($conResp) {
-                        $conHealthy = $true
-                    }
-                } catch {
-                    if (Get-Command "curl.exe" -ErrorAction SilentlyContinue) {
-                        $cOut = & curl.exe -s -m 3 "http://${VM2_IP}:8090/api/status" 2>$null
-                        if ($cOut -match 'ci_healthy' -or $LASTEXITCODE -eq 0) { $conHealthy = $true }
-                    }
+                # 2. Probe Demo Console (:8090)
+                if (-not $conHealthy) {
+                    $conHealthy = Test-VM2-ConsoleHealth -Url $conTargetUrl -TimeoutSec 3
                 }
-            }
 
-            # 3. Probe Local Docker Registry (:5000)
-            if (-not $regHealthy) {
-                try {
-                    $regResp = Invoke-WebRequest -Uri "http://${VM2_IP}:5000/v2/" -Method Get -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop
-                    if ($regResp.StatusCode -eq 200) {
-                        $regHealthy = $true
-                    }
-                } catch {
-                    if ($_.Exception.Response -and $_.Exception.Response.StatusCode.value__ -eq 200) {
-                        $regHealthy = $true
-                    } elseif (Get-Command "curl.exe" -ErrorAction SilentlyContinue) {
-                        $cOut = & curl.exe -s -I -m 3 "http://${VM2_IP}:5000/v2/" 2>$null
-                        if ($cOut -match "200 OK") { $regHealthy = $true }
-                    }
+                # 3. Probe Local Docker Registry (:5000)
+                if (-not $regHealthy) {
+                    $regHealthy = Test-VM2-RegistryHealth -Url $regTargetUrl -TimeoutSec 3
                 }
             }
 
@@ -595,10 +674,11 @@ if (-not $SkipVM2) {
             } else {
                 $statusSummary = "Waiting (CI=$([string]$ciHealthy), Console=$([string]$conHealthy), Registry=$([string]$regHealthy))"
                 Write-Host " [$statusSummary]" -ForegroundColor Yellow
-                Start-Sleep -Seconds $retryDelay
+                if ($i -lt $maxRetries -and $retryDelay -gt 0) {
+                    Start-Sleep -Seconds $retryDelay
+                }
             }
         }
-    }
 
     $VM2_CI_Status       = if ($ciHealthy) { "PASS" } else { "FAIL" }
     $VM2_Console_Status  = if ($conHealthy) { "PASS" } else { "FAIL" }
